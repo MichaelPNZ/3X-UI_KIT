@@ -39,6 +39,16 @@ CLASH_UA = re.compile(r"clash|mihomo|flclash|stash|nyanpasu|meta", re.I)
 # AmneziaWG добавляем только приложениям на ядре Mihomo. Karing, Hiddify и другие на sing-box
 # тоже могут просить формат Clash (Karing так и делает), но AmneziaWG не умеют.
 NO_AWG_UA = re.compile(r"karing|hiddify|nekobox|sing-?box|husi|stash|shadowrocket|v2box|streisand|happ|loon|surge|quantumult", re.I)
+# Hiddify 4.x в строке приложения называет себя и Clash, поэтому панель отдаёт ему Clash-YAML, а он обрезает в нём пробелы и
+# выдаёт «Unable to determine config format». Панели такой клиент представляем без слов про Clash: она отдаст обычный
+# список ссылок (base64), который Hiddify читает без проблем.
+HIDDIFY_UA = re.compile(r"hiddify", re.I)
+
+
+def upstream_ua(ua):
+    return CLASH_UA.sub("", ua).strip() if HIDDIFY_UA.search(ua) else ua
+
+
 SUB_ID = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
 # Страница подписки для браузера (React от 3X-UI) подгружает скрипты и стили из «<путь>/assets/…»: пропускаем только такие файлы.
 ASSET = re.compile(r"^assets/[A-Za-z0-9_.-]{1,128}\.(js|css|woff2?|svg|png|ico|map)$")
@@ -65,6 +75,11 @@ DOH_DEFAULT = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
 PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"]
 # Дополнительные пути, которые панель показывает на странице подписки (Clash и JSON): обрабатываются так же, как основной.
 EXTRA = ["/" + x.strip("/") + "/" for x in CONF.get("extra_paths", []) if isinstance(x, str) and re.fullmatch(r"/?[A-Za-z0-9_-]+/?", x)]
+# После kit net site прежнее имя сайта REALITY ещё неделю принимается сервером (льготный срок), а панель берёт имя для ссылки
+# случайно из списка. Карта «прежнее имя → нынешнее» от kit: в подписку уходит только нынешнее. Нет файла – ничего не меняем.
+GRACE_FILE = os.environ.get("KIT_SUB_GRACE") or "/etc/kit-sub/sni-grace.json"
+SITE_NAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+")
+LINK_SNI = re.compile(r"([?&]sni=)([^&#\s]*)")
 
 
 def log(msg):
@@ -94,10 +109,32 @@ def fix_userinfo(value):
 JSON_FIX_MAX = 2 * 1024 * 1024
 
 
-def fix_vless_encryption(body):
+def load_grace():
+    """Карта «прежнее имя сайта → нынешнее» (файл от kit). Только имена сайтов, остальное отбрасываем."""
+    try:
+        with open(GRACE_FILE, "rb") as f:
+            raw = f.read(65537)
+        data = json.loads(raw.decode("utf-8")) if len(raw) <= 65536 else {}
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in list(data.items())[:100] if isinstance(k, str) and isinstance(v, str)
+            and len(k) <= 253 and len(v) <= 253 and SITE_NAME.fullmatch(k) and SITE_NAME.fullmatch(v)}
+
+
+def grace_link(line, grace):
+    """Ссылка REALITY с прежним именем сайта → с нынешним; остальные ссылки как есть."""
+    if not grace or not line.startswith("vless://") or "security=reality" not in line:
+        return line
+    return LINK_SNI.sub(lambda m: m.group(1) + grace.get(m.group(2), m.group(2)), line)
+
+
+def fix_vless_encryption(body, grace=None):
     """JSON-подписка панели: у vless-пользователя без encryption (нет поля или пусто) ставим "none" – Xray иначе
     не принимает конфиг. Две формы: vnext[].users[] и плоская (settings.id/encryption). Непустое значение
-    (например, mlkem) не трогаем. Не разобралось, слишком большое или менять нечего – тело как пришло."""
+    (например, mlkem) не трогаем. Прежнее (льготное) имя сайта REALITY – на нынешнее (grace).
+    Не разобралось, слишком большое или менять нечего – тело как пришло."""
     if len(body) > JSON_FIX_MAX:
         return body
     try:
@@ -116,6 +153,11 @@ def fix_vless_encryption(body):
     for cfg in (data if isinstance(data, list) else [data]):
         outs = cfg.get("outbounds") if isinstance(cfg, dict) else None
         for o in outs if isinstance(outs, list) else []:
+            ss = o.get("streamSettings") if isinstance(o, dict) else None
+            rs = ss.get("realitySettings") if isinstance(ss, dict) else None
+            if grace and isinstance(rs, dict) and rs.get("serverName") in grace:
+                rs["serverName"] = grace[rs["serverName"]]
+                changed = True
             st = o.get("settings") if isinstance(o, dict) and o.get("protocol") == "vless" else None
             if not isinstance(st, dict):
                 continue
@@ -127,9 +169,9 @@ def fix_vless_encryption(body):
     return json.dumps(data, ensure_ascii=False).encode() if changed else body
 
 
-def strip_links(body):
+def strip_links(body, grace=None):
     """Список ссылок (base64 или текст) без vpn:// и tg:// – их не умеет ни одно VPN-приложение
-    со ссылками: vpn:// – конфиг для AmneziaVPN, tg:// – прокси для Telegram."""
+    со ссылками: vpn:// – конфиг для AmneziaVPN, tg:// – прокси для Telegram. Прежнее имя сайта REALITY – на нынешнее."""
     text = body.decode("utf-8", "replace").strip()
     encoded = "://" not in text
     if encoded:
@@ -137,7 +179,7 @@ def strip_links(body):
             text = base64.b64decode(text + "=" * (-len(text) % 4)).decode("utf-8", "replace")
         except ValueError:
             return body
-    lines = [l for l in text.splitlines() if l.strip() and not l.startswith(("vpn://", "tg://"))]
+    lines = [grace_link(l, grace) for l in text.splitlines() if l.strip() and not l.startswith(("vpn://", "tg://"))]
     out = "\n".join(lines)
     return base64.b64encode(out.encode()).decode().encode() if encoded else out.encode()
 
@@ -416,7 +458,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ua = self.headers.get("User-Agent", "")
         host = CONF.get("link_host") or self.headers.get("Host", CONF.get("host", ""))
         accept = self.headers.get("Accept", "")
-        code, headers, body = upstream(sub_id, ua, host, accept, prefix)
+        code, headers, body = upstream(sub_id, upstream_ua(ua), host, accept, prefix)
         if code is None:
             return self.send_html_error(502)
 
@@ -435,9 +477,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif code == 200 and ("json" in headers.get("content-type", "") or (
                     "text/plain" in headers.get("content-type", "") and body.lstrip()[:1] in (b"[", b"{"))):
                 # Панель 3.9 отдаёт JSON-подписку с Content-Type text/plain – определяем по телу.
-                body = fix_vless_encryption(body)
+                body = fix_vless_encryption(body, load_grace())
             elif code == 200 and "text/plain" in headers.get("content-type", ""):
-                body = strip_links(body)
+                body = strip_links(body, load_grace())
             if code == 200 and clash and CONF.get("auto", True):
                 body = add_auto(body)
             if code == 200 and clash and CONF.get("dns", True):
@@ -546,7 +588,7 @@ def main():
         cert, key = os.path.join(CREDS, "cert.pem"), os.path.join(CREDS, "key.pem")
     if not cert:
         srv = Server((CONF.get("listen", "127.0.0.1"), int(CONF["port"])), Handler)
-        log(f"kit-sub слушает http://{CONF.get('listen', '127.0.0.1')}:{CONF['port']}{PATH} (TLS снимает nginx)")
+        log(f"kit-sub слушает {CONF.get('listen', '127.0.0.1')}:{CONF['port']} (TLS снимает nginx)")  # путь подписки в журнал не пишем: он секретный
         srv.serve_forever()
         return
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -571,7 +613,7 @@ def main():
     threading.Thread(target=reload_cert, daemon=True).start()
     srv = Server((CONF.get("listen", "0.0.0.0"), int(CONF["port"])), Handler)
     srv.ssl_ctx = ctx
-    log(f"kit-sub слушает {CONF.get('listen', '0.0.0.0')}:{CONF['port']}{PATH}")
+    log(f"kit-sub слушает {CONF.get('listen', '0.0.0.0')}:{CONF['port']}")
     srv.serve_forever()
 
 

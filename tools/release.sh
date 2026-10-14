@@ -14,6 +14,9 @@ cd "$(dirname "$0")/.."
 die() { printf '✗  %s\n' "$*" >&2; exit 1; }
 ok()  { printf '✓  %s\n' "$*"; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+# Скачивание с GitHub: сеть бывает нестабильной, поэтому несколько попыток, а при неудаче – понятное сообщение
+# (раньше скрипт молча останавливался на случайном месте).
+get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 "$1" || { echo "✗  Не скачалось с GitHub: $1 (сеть нестабильна: повторите запуск или включите VPN)" >&2; return 1; }; }
 
 key=${1:-$HOME/.ssh/3xui_kit_release}
 [[ -f $key ]] || die "Нет закрытого ключа $key. Создать: ssh-keygen -t ed25519 -C \"3X-UI KIT releases\" -f $key"
@@ -26,15 +29,21 @@ v=$(tr -d '[:space:]' <VERSION)
 for f in scripts/3x-ui.sh scripts/hysteria2.sh scripts/kit.sh; do
   grep -qx "KIT_VERSION=\"$v\"" "$f" || die "$f: KIT_VERSION не $v"
 done
-grep -q "^## v$v" CHANGELOG.md || die "В CHANGELOG.md нет раздела ## v$v"
+# Точно эта версия: «## v1.2» не должна находить «## v1.2.1», а точка – не любой символ.
+grep -qE "^## v${v//./\\.}([: ]|$)" CHANGELOG.md || die "В CHANGELOG.md нет раздела ## v$v"
 ok "Версия $v во всех скриптах и в CHANGELOG"
+# Команда установки в README и в инструкции закреплена за тегом: при выпуске тег должен быть этой версии.
+for f in README.md manuals/3x-ui.md; do
+  grep -q "3X-UI_KIT/v${v}/scripts/3x-ui.sh" "$f" || die "$f: команда установки не закреплена за тегом v$v"
+done
+ok "Команда установки в README закреплена за тегом v$v"
 
 [[ -z $(git status --porcelain -- "${FILES[@]}" CHANGELOG.md) ]] || die "Есть незакоммиченные изменения в файлах релиза – сначала коммит."
 
 # Установщик 3X-UI: хеш в скрипте должен совпадать с тем, что сейчас лежит на GitHub.
 xv=$(sed -n 's/^XUI_VERSION="\(.*\)"/\1/p' scripts/3x-ui.sh)
 xs=$(sed -n 's/^XUI_INSTALL_SHA256="\(.*\)"/\1/p' scripts/3x-ui.sh)
-got=$(curl -fsSL "https://raw.githubusercontent.com/MHSanaei/3x-ui/$xv/install.sh" | sha | awk '{print $1}')
+got=$(get "https://raw.githubusercontent.com/MHSanaei/3x-ui/$xv/install.sh" | sha | awk '{print $1}')
 [[ $got == "$xs" ]] || die "Установщик 3X-UI $xv изменился: $got вместо $xs. Проверьте, что поменялось, прежде чем выпускать."
 ok "Установщик 3X-UI $xv совпадает с закреплённым SHA256"
 
@@ -42,7 +51,7 @@ ok "Установщик 3X-UI $xv совпадает с закреплённы�
 xc=$(sed -n 's/^XRAY_CORE="\(.*\)"/\1/p' scripts/3x-ui.sh)
 for a in 64 arm64-v8a; do
   pin=$(sed -n "s/^  \[$a\]=\([0-9a-f]\{64\}\)\$/\1/p" scripts/3x-ui.sh)
-  off=$(curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/$xc/Xray-linux-$a.zip.dgst" | awk '/^SHA2-256=/ {print $2}')
+  off=$(get "https://github.com/XTLS/Xray-core/releases/download/$xc/Xray-linux-$a.zip.dgst" | awk '/^SHA2-256=/ {print $2}')
   [[ -n $pin && $pin == "$off" ]] || die "Сумма ядра Xray $xc ($a) в 3x-ui.sh не совпадает с официальной: «$pin» вместо «$off»."
 done
 ok "Суммы архивов ядра Xray $xc совпадают с официальными"
@@ -55,11 +64,11 @@ kx=$(sed -n 's/^XRAY_PIN="\(.*\)"/\1/p' scripts/kit.sh)
 [[ $kx == "$xc" ]] || die "XRAY_PIN в kit.sh ($kx) не совпадает с XRAY_CORE в 3x-ui.sh ($xc)."
 for a in amd64 arm64; do
   pin=$(sed -n "s/^  \[$a\]=\([0-9a-f]\{64\}\)\$/\1/p" scripts/kit.sh)
-  off=$(curl -fsSL "https://github.com/MHSanaei/3x-ui/releases/download/$kp/x-ui-linux-$a.tar.gz.sha256" | awk 'NR == 1 {print $1}')
+  off=$(get "https://github.com/MHSanaei/3x-ui/releases/download/$kp/x-ui-linux-$a.tar.gz.sha256" | awk 'NR == 1 {print $1}')
   [[ -n $pin && $pin == "$off" ]] || die "Сумма архива панели $kp ($a) в kit.sh не совпадает с официальной: «$pin» вместо «$off»."
 done
 shs=$(sed -n 's/^XUI_SH_SHA256=\(.*\)/\1/p' scripts/kit.sh)
-got=$(curl -fsSL "https://raw.githubusercontent.com/MHSanaei/3x-ui/$kp/x-ui.sh" | sha | awk '{print $1}')
+got=$(get "https://raw.githubusercontent.com/MHSanaei/3x-ui/$kp/x-ui.sh" | sha | awk '{print $1}')
 [[ $shs == "$got" ]] || die "Сумма x-ui.sh $kp в kit.sh не совпадает с официальной: «$shs» вместо «$got»."
 ok "Панель $kp и ядро $kx в kit.sh совпадают с установщиком и официальными суммами"
 

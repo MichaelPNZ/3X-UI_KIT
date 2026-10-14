@@ -82,7 +82,7 @@
   // Геобазы, которые ставит XKeen (имена файлов в /opt/etc/xray/dat).
   const BASES = {
     zkeen: { label: 'ZKeen', hint: 'ставится XKeen по умолчанию, рекомендуется', site: 'zkeen.dat', ip: 'zkeenip.dat' },
-    v2fly: { label: 'V2Fly', hint: 'нужна для отдельных сервисов и блокировки рекламы', site: 'geosite_v2fly.dat', ip: 'geoip_v2fly.dat' },
+    v2fly: { label: 'V2Fly', hint: 'нужна для отдельных сервисов и для отсева рекламы', site: 'geosite_v2fly.dat', ip: 'geoip_v2fly.dat' },
     refilter: { label: 'Re:filter', hint: 'большой список сайтов', site: 'geosite_refilter.dat', ip: 'geoip_refilter.dat' },
   };
 

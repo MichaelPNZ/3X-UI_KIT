@@ -16,7 +16,7 @@ W=$(mktemp -d); BAK=$W/xray.orig
 command -v kit >/dev/null || { echo "Нужен установленный kit." >&2; exit 1; }
 arch=$(uname -m); case $arch in x86_64) xa=64; ma=amd64 ;; aarch64) xa=arm64-v8a; ma=arm64 ;; *) echo "Только amd64 и arm64." >&2; exit 1 ;; esac
 
-restore() { if [[ -f $BAK ]]; then systemctl stop x-ui; install -m 755 "$BAK" "$BIN"; systemctl start x-ui; sleep 8; fi; pkill -f "$W/" 2>/dev/null || true; rm -rf "$W"; }
+restore() { if [[ -f $BAK ]]; then systemctl stop x-ui; install -m 755 "$BAK" "$BIN"; systemctl reset-failed x-ui 2>/dev/null; systemctl start x-ui; sleep 8; fi; pkill -f "$W/" 2>/dev/null || true; rm -rf "$W"; }
 trap restore EXIT
 
 gh() { curl -fsSL "$1"; }
@@ -33,7 +33,7 @@ if [[ -n $CAND ]]; then
   gh "https://github.com/XTLS/Xray-core/releases/download/$CAND/Xray-linux-$xa.zip.dgst" >"$W/x.dgst"
   want=$(awk 'tolower($0) ~ /sha2-256/ {print $NF; exit}' "$W/x.dgst"); got=$(sha256sum "$W/x.zip" | awk '{print $1}')
   [[ -n $want && $want == "$got" ]] || { echo "Сумма ядра $CAND не совпала – остановился." >&2; exit 1; }
-  unzip -q -o "$W/x.zip" xray -d "$W"; systemctl stop x-ui; install -m 755 "$W/xray" "$BIN"; systemctl start x-ui; sleep 8
+  unzip -q -o "$W/x.zip" xray -d "$W"; systemctl stop x-ui; install -m 755 "$W/xray" "$BIN"; systemctl reset-failed x-ui 2>/dev/null; systemctl start x-ui; sleep 8
 fi
 echo "Ядро на сервере: $("$BIN" -version | head -1)"
 
