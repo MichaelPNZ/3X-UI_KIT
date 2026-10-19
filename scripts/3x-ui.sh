@@ -36,9 +36,9 @@ wait_apt_idle() {
   return 0
 }
 
-XUI_VERSION="v3.9.0"
-# SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-09-30).
-XUI_INSTALL_SHA256="18616fe26c8f6c92db6daa2dcd7cd53c5143ee69ecfd26d8ea6dc9b2c78607a6"
+XUI_VERSION="v3.10.2"
+# SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-10-19).
+XUI_INSTALL_SHA256="9684bae4f769b2127fcceceb4f200045657381311867529e6ba76c6b58e2825d"
 KIT_VERSION="1.2.1"
 # kit и kit-sub берём из того же релиза, что и этот скрипт, а не из меняющейся ветки main.
 KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$KIT_VERSION"
@@ -1003,22 +1003,34 @@ main() {
 install_xui() { # порт путь логин пароль
   local tmp
   [[ ${PANEL_SSL:-} == ip ]] && ufw_open_80
-  tmp=$(mktemp)
+  tmp=$(mktemp -d)
   say "Ставлю 3X-UI $XUI_VERSION официальным установщиком (пара минут)"
-  curl -fsSL --retry 3 -o "$tmp" "https://raw.githubusercontent.com/$XUI_REPO/$XUI_VERSION/install.sh"
-  [[ $(sha256sum "$tmp" | awk '{print $1}') == "$XUI_INSTALL_SHA256" ]] \
+  curl -fsSL --retry 3 -o "$tmp/install.sh" "https://raw.githubusercontent.com/$XUI_REPO/$XUI_VERSION/install.sh"
+  [[ $(sha256sum "$tmp/install.sh" | awk '{print $1}') == "$XUI_INSTALL_SHA256" ]] \
     || die "Установщик 3X-UI $XUI_VERSION не совпал с проверенным (SHA256) – не запускаю. Сообщите нам: github.com/itsnotkubrick/3X-UI_KIT/issues"
+  # В архиве панели лежит новое ядро; у установщика нет параметра, сохраняющего наше.
+  # Сначала проверяем закреплённое ядро, затем вставляем его до config_after_install:
+  # эта функция уже может перезапустить панель при настройке сертификата.
+  xray_fetch_verified "$tmp" && unzip -q "$tmp/xray.zip" xray -d "$tmp" \
+    || die "Не удалось подготовить проверенное ядро Xray $XRAY_CORE – панель не устанавливаю."
+  [[ $(grep -cx '    config_after_install' "$tmp/install.sh") == 1 ]] \
+    || die "Изменился порядок официальной установки – не могу гарантировать сохранение ядра."
+  sed -i '/^    config_after_install$/i\
+    install -m 755 "${KIT_XRAY_BINARY:?}" "bin/xray-linux-$(arch)" || exit 1\
+    read -r kit_core_name kit_core_version kit_core_rest < <("bin/xray-linux-$(arch)" version) || exit 1\
+    [[ "v$kit_core_version" == "${KIT_XRAY_VERSION:?}" ]] || exit 1
+' "$tmp/install.sh"
   spin_start "Устанавливаю панель 3X-UI"
-  if ! XUI_NONINTERACTIVE=1 XUI_SSL_MODE="${PANEL_SSL/custom/none}" XUI_SERVER_IP="$HOST" \
+  if ! KIT_XRAY_BINARY="$tmp/xray" KIT_XRAY_VERSION="$XRAY_CORE" XUI_NONINTERACTIVE=1 XUI_SSL_MODE="${PANEL_SSL/custom/none}" XUI_SERVER_IP="$HOST" \
       XUI_PANEL_PORT="$1" XUI_WEB_BASE_PATH="$2" \
       XUI_USERNAME="$3" XUI_PASSWORD="$4" \
-      bash "$tmp" "$XUI_VERSION" </dev/null >/var/log/3x-ui-install.log 2>&1; then
+      bash "$tmp/install.sh" "$XUI_VERSION" </dev/null >/var/log/3x-ui-install.log 2>&1; then
     spin_stop
     tail -20 /var/log/3x-ui-install.log >&2
     die "Установщик 3X-UI завершился с ошибкой. Полный лог: /var/log/3x-ui-install.log"
   fi
   spin_stop
-  rm -f "$tmp"
+  rm -rf "$tmp"
 }
 
 # Панель: API по https или http – сертификат мог появиться после установщика.
@@ -1096,7 +1108,7 @@ set_xray_core() {
       xray_install_fallback
       cur_core=$(/usr/local/x-ui/bin/xray-linux-* version 2>/dev/null | awk 'NR==1 {print "v" $2}')
     fi
-    [[ $cur_core == "$XRAY_CORE" ]] || later "Не удалось сменить ядро Xray (сейчас $cur_core). Клиенты на Mihomo и sing-box могут не подключиться."
+    [[ $cur_core == "$XRAY_CORE" ]] || die "Не удалось установить закреплённое ядро Xray $XRAY_CORE (сейчас $cur_core). Останавливаю установку: клиенты на Mihomo и sing-box могут не подключиться."
   fi
 }
 
@@ -2075,7 +2087,7 @@ restore_main() { # файл
   export DEBIAN_FRONTEND=noninteractive
   wait_apt_idle
   apt_refresh
-  apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron python3 python3-yaml >/dev/null
+  apt-get install -y -qq unzip curl jq openssl qrencode ca-certificates iproute2 ufw socat cron python3 python3-yaml >/dev/null
 
   # Сначала проверяем архив целиком: только наши пути, только файлы и папки, без ссылок
   # и «../». Чужой архив не должен ничего записать мимо.

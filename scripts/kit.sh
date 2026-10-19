@@ -23,13 +23,13 @@ KIT_LATEST=/etc/kit/latest-version
 
 # Проверенные версии: kit panel update ставит именно их, kit check предупреждает о других.
 # Суммы архива панели и x-ui.sh сверяет tools/release.sh с официальными (перед каждым выпуском).
-XUI_PIN="v3.9.0"
+XUI_PIN="v3.10.2"
 XRAY_PIN="v26.6.27"
 declare -A XUI_TARBALL_SHA256=(
-  [amd64]=d7cbe0bf6358ee0d2117c24fd2efb483502e411d38e2ea59bd0bf5e7a3e39390
-  [arm64]=9a2e43c976a2e71618a30d8f38b52476b25ed363c6989599e2f625cc52f51a81
+  [amd64]=bfda7921984e7a72555c38d4e861c7a8b67b3686b658608937de99682f1452d0
+  [arm64]=a867c65ce52ad49f6504dd4c9c395337dc92ba57ae478da4f1b7ddb624014ed5
 )
-XUI_SH_SHA256=d28959cb5da86c8ddaf2199e5c32dd1ea5dc0a87fcc53f900dd39b133070898a
+XUI_SH_SHA256=3c7dabe7ea9edf0d950eff1caffbf203a1f8b52e98fc75e203372757f47998c0
 
 if [[ -t 1 ]]; then
   G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -1375,10 +1375,11 @@ pin_core() {
   return 1
 }
 
-panel_healthy() { # ждём ответа панели до 60 секунд
+panel_healthy() { # ждём ответа панели и запущенного ядра до 60 секунд
   local i
   for i in $(seq 1 30); do
-    curl -fsk -m 5 -o /dev/null -H @<(printf 'Authorization: Bearer %s\n' "$XUI_API_TOKEN") "$API/server/getNewUUID" 2>/dev/null && return 0
+    curl -fsk -m 5 -H @<(printf 'Authorization: Bearer %s\n' "$XUI_API_TOKEN") "$API/server/status" 2>/dev/null \
+      | jq -e '.success == true and .obj.xray.state == "running"' >/dev/null 2>&1 && return 0
     sleep 2
   done
   return 1
@@ -1388,7 +1389,7 @@ panel_healthy() { # ждём ответа панели до 60 секунд
 # проверенный архив, замена файлов панели, миграция базы. Не трогает ядро Xray, сертификаты и настройки
 # (официальный update.sh при отсутствии сертификата сам выпускает его и включает TLS, меняет ядро и ставит fail2ban).
 panel_update() {
-  local force=no a arch cur target=${XUI_PIN#v} tmp ts bak got want os_id keep_core
+  local force=no a arch cur target=${XUI_PIN#v} tmp ts bak got want os_id keep_core core_sha
   for a in "$@"; do
     case $a in
       --force) force=yes ;;
@@ -1445,6 +1446,7 @@ PY
   # 3. Замена файлов. Ядро Xray (проверенное) оставляем: берём его из прежней установки.
   keep_core=$tmp/xray.keep
   cp -a "/usr/local/x-ui/bin/xray-linux-$arch" "$keep_core"
+  core_sha=$(sha256sum "$keep_core" | awk '{print $1}')
   systemctl stop x-ui
   pkill -f 'mtg-linux-[^ ]* run ' >/dev/null 2>&1 || true
   install -m 755 "$tmp/x-ui/x-ui" /usr/local/x-ui/x-ui.new && mv -f /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui
@@ -1467,21 +1469,26 @@ PY
   systemctl daemon-reload
   /usr/local/x-ui/x-ui migrate >/dev/null 2>&1 || true
   systemctl enable x-ui >/dev/null 2>&1 || true
-  systemctl start x-ui
 
-  # 4. Проверка и откат при провале.
-  if panel_healthy && [[ $(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1) == "$target" ]] && { [[ $pre != ok ]] || { sleep 5; deep_probe; }; }; then
+  # 4. Проверка и откат при провале (включая отказ запуска службы).
+  if systemctl start x-ui && panel_healthy && [[ $(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1) == "$target" ]] \
+      && [[ $(sha256sum "/usr/local/x-ui/bin/xray-linux-$arch" | awk '{print $1}') == "$core_sha" ]] \
+      && { [[ $pre != ok ]] || { sleep 5; deep_probe; }; }; then
     systemctl is-active -q x-ui || true
-    say "Панель обновлена до $target, ядро Xray ${XRAY_PIN#v} осталось."
+    say "Панель обновлена до $target, ядро Xray $(xray_version) сохранено (SHA256 совпадает)."
     [[ $pre == ok ]] && say "Подключения клиентом после обновления работают (REALITY, XHTTP, Hysteria2)."
     echo "Копию прежней панели можно удалить, когда убедитесь, что всё работает: rm -rf $bak"
     echo "Проверить сервер: ${B}kit → Проверка сервера → Быстрая проверка${N}"
     return 0
   fi
-  warn "Панель после обновления не отвечает или подключения клиентом не работают – возвращаю прежнюю."
+  warn "Проверка панели, ядра или подключений после обновления не прошла – возвращаю прежнюю установку."
   systemctl stop x-ui || true
   rm -rf /usr/local/x-ui && cp -a "$bak/usr-local-x-ui" /usr/local/x-ui
   cp -a "$bak/etc-x-ui/." /etc/x-ui/
+  # Копия каталога могла попасть между записями SQLite. Возвращаем согласованный snapshot
+  # и убираем WAL/SHM новой базы, чтобы они не переиграли миграции поверх старой.
+  rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm
+  install -m 600 "$bak/x-ui.db" /etc/x-ui/x-ui.db
   [[ -f $bak/x-ui.service ]] && cp -a "$bak/x-ui.service" /etc/systemd/system/x-ui.service
   [[ -f $bak/x-ui.sh ]] && install -m 755 "$bak/x-ui.sh" /usr/bin/x-ui
   systemctl daemon-reload; systemctl start x-ui || true
