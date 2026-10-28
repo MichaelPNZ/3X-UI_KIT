@@ -1,5 +1,6 @@
 """Проверки fix_vless_encryption в kit-sub: python3 tools/test/jsonfix_test.py"""
-import json, os, threading, urllib.request, tempfile, unittest, importlib.util
+import email.message, io, json, os, tempfile, unittest, importlib.util
+from unittest import mock
 
 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 tmp = tempfile.mkdtemp()
@@ -80,16 +81,21 @@ class Fix(unittest.TestCase):
 class Http(unittest.TestCase):
     """Через настоящий обработчик, upstream подменён заглушкой."""
     def get(self, ctype, body):
-        orig = ks.upstream
-        ks.upstream = lambda *a, **k: (200, {"content-type": ctype}, body)
-        srv = ks.Server(("127.0.0.1", 0), ks.Handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        try:
-            req = urllib.request.Request("http://127.0.0.1:%d%sabc123" % (srv.server_address[1], ks.PATH),
-                                         headers={"User-Agent": "v2rayN/7"})
-            return urllib.request.urlopen(req, timeout=10).read()
-        finally:
-            srv.shutdown(); srv.server_close(); ks.upstream = orig
+        handler = object.__new__(ks.Handler)
+        handler.path = ks.PATH + "abc123"
+        handler.command = "GET"
+        handler.request_version = "HTTP/1.1"
+        handler.requestline = "GET /fixture HTTP/1.1"
+        handler.close_connection = True
+        handler.headers = email.message.Message()
+        handler.headers["User-Agent"] = "v2rayN/7"
+        handler.headers["Host"] = "fixture.example"
+        handler.wfile = io.BytesIO()
+        # TUIC fallback is covered by tuic_sub_test.py; these tests isolate JSON dispatch.
+        with mock.patch.object(ks, "upstream", return_value=(200, {"content-type": ctype}, body)), \
+             mock.patch.object(ks, "restore_tuic_links", side_effect=lambda value, *a, **k: value):
+            handler.do_GET()
+        return handler.wfile.getvalue().split(b"\r\n\r\n", 1)[1]
 
     def test_json_text_plain(self):
         raw = json.dumps([{"outbounds": [flat(encryption="")]}], indent=2).encode()

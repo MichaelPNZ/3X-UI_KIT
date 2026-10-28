@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hysteria2 – https://github.com/itsnotkubrick/3X-UI_KIT
+# Hysteria2 – https://github.com/MichaelPNZ/3X-UI_KIT
 #
 # Отдельный установщик Hysteria2 больше не поддерживается: Hysteria2 входит в основную
 # установку 3X-UI KIT (scripts/3x-ui.sh). Файл оставлен, чтобы старая команда `hy2 update`
@@ -8,7 +8,7 @@
 # Код выхода 1 при любом запуске (и при `__update_binary`) – старый `hy2 update` на нём
 # останавливается и не заменяет команду hy2.
 
-KIT_VERSION="1.2.1"
+KIT_VERSION="1.3.0"
 
 cat >&2 <<'MSG'
 Отдельный установщик Hysteria2 больше не поддерживается.

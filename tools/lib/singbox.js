@@ -10,8 +10,11 @@
   function tls(p) {
     const s = p.tls;
     if (!s || s.security === 'none') return undefined;
+    // certificate_public_key_sha256 is an SPKI hash, not the certificate-DER
+    // SHA256 carried by Xray's pcs. Silently dropping this pin is unsafe.
+    if (s.pin) throw new Error('sing-box не поддерживает SHA256-отпечаток сертификата из ссылки — используйте Xray или Mihomo');
     const t = clean({ enabled: true, server_name: s.sni, alpn: s.alpn, insecure: s.insecure || undefined });
-    if (s.fp) t.utls = { enabled: true, fingerprint: s.fp };
+    if (s.security === 'reality' || s.fp) t.utls = { enabled: true, fingerprint: s.security === 'reality' ? 'chrome' : s.fp };
     if (s.security === 'reality') t.reality = clean({ enabled: true, public_key: s.pbk, short_id: s.sid });
     return t;
   }
@@ -45,8 +48,8 @@
       case 'ss':
         return { outbound: Object.assign(base, { type: 'shadowsocks', method: p.method, password: p.password }) };
       case 'hysteria2': {
-        // sing-box не умеет закреплять отпечаток сертификата – при pinSHA256 проверку отключаем.
-        const t = clean({ enabled: true, server_name: p.sni, alpn: p.alpn, insecure: (p.insecure || !!p.pinSHA256) || undefined });
+        if (p.pinSHA256) throw new Error('sing-box не поддерживает SHA256-отпечаток сертификата Hysteria2 — используйте Xray или Mihomo');
+        const t = clean({ enabled: true, server_name: p.sni, alpn: p.alpn, insecure: p.insecure || undefined });
         const o = clean(Object.assign(base, { type: 'hysteria2', password: p.password, tls: t }));
         if (p.obfs) o.obfs = { type: p.obfs, password: p.obfsPassword };
         return { outbound: o };

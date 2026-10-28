@@ -102,10 +102,13 @@
     if (s.security === 'none') { o.tls = false; return; }
     o.tls = true;
     o[sniKey] = s.sni;
-    o['client-fingerprint'] = s.fp || undefined;
+    o['client-fingerprint'] = s.security === 'reality' ? 'chrome' : s.fp || undefined;
     o.alpn = s.alpn;
-    o['skip-cert-verify'] = s.insecure || undefined;
-    if (s.security === 'reality') o['reality-opts'] = clean({ 'public-key': s.pbk, 'short-id': s.sid });
+    o['skip-cert-verify'] = (s.insecure && !s.pin) || undefined;
+    if (s.security === 'tls') o.fingerprint = s.pin || undefined;
+    if (s.security === 'reality') o['reality-opts'] = clean({
+      'public-key': s.pbk, 'short-id': s.sid, 'support-x25519mlkem768': true,
+    });
   }
 
   function proxy(p) {
@@ -256,7 +259,7 @@
     const where = opts.target === 'nikki'
       ? '# Для Nikki (OpenWrt): профиль /etc/nikki/profiles/3x-ui-kit.yaml, порты и DNS Nikki подставит сам\n'
       : '# Файл для XKeen: /opt/etc/mihomo/config.yaml, затем xkeen -restart\n';
-    const head = '# Сгенерировано: https://itsnotkubrick.github.io/3X-UI_KIT/tools/\n' + where +
+    const head = '# Сгенерировано: https://michaelpnz.github.io/3X-UI_KIT/tools/\n' + where +
       '# Панель управления: http://IP-роутера:9090/ui (секрет – поле secret ниже)\n';
     return { yaml: head + yaml(cfg).replace(/^\n/, ''), config: cfg, count: proxies.length };
   }

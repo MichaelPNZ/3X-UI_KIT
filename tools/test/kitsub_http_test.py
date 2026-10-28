@@ -9,8 +9,12 @@ os.environ["KIT_SUB_CONFIG"] = cfgp
 os.environ["KIT_SUB_RULES"] = os.path.join(tmp, "rules.yaml")
 spec = importlib.util.spec_from_file_location("kit_sub", os.path.join(root, "scripts", "kit-sub.py"))
 ks = importlib.util.module_from_spec(spec); spec.loader.exec_module(ks)
-srv = ks.Server(("127.0.0.1", 0), ks.Handler)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
+try:
+    srv = ks.Server(("127.0.0.1", 0), ks.Handler)
+except PermissionError:
+    srv = None  # Например, sandbox macOS запрещает даже loopback bind; Linux CI выполняет эти тесты.
+if srv is not None:
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
 def raw(data):
@@ -27,6 +31,7 @@ def raw(data):
     return out.decode(errors="replace")
 
 
+@unittest.skipIf(srv is None, "среда запрещает bind loopback; выполнить в Linux CI")
 class Http(unittest.TestCase):
     def test_status_and_server(self):
         r = raw(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
@@ -73,6 +78,7 @@ class Http(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("openssl"), "нужен openssl")
+@unittest.skipIf(srv is None, "среда запрещает bind loopback; выполнить в Linux CI")
 class Tls(unittest.TestCase):
     """Свой TLS (--multi-port): ALPN http/1.1, как у nginx без http2."""
     def test_alpn(self):

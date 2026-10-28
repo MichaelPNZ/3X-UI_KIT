@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { parseLink, parseText } = require('../lib/links.js');
 const { buildXray } = require('../lib/xray.js');
 const { buildMihomo } = require('../lib/mihomo.js');
+const { buildSingbox } = require('../lib/singbox.js');
 
 const REALITY = 'vless://5f2c1e7a-0b3d-4c6e-9a8f-1234567890ab@203.0.113.10:443?type=tcp&security=reality&pbk=Fj98Liz-8fJCAaK_hcsGDJRSd9ztkw0TDR2v4kqK7TA&fp=chrome&sni=www.microsoft.com&sid=2831cdcf4a278ac2&spx=%2F&flow=xtls-rprx-vision#%D0%93%D0%B5%D1%80%D0%BC%D0%B0%D0%BD%D0%B8%D1%8F';
 const WS_TLS = 'vless://11111111-2222-3333-4444-555555555555@cdn.example.com:443?type=ws&security=tls&path=%2Fws%3Fed%3D2048&host=cdn.example.com&sni=cdn.example.com&alpn=h2%2Chttp%2F1.1#ws';
@@ -23,6 +24,50 @@ test('REALITY', () => {
   assert.equal(p.tls.pbk, 'Fj98Liz-8fJCAaK_hcsGDJRSd9ztkw0TDR2v4kqK7TA');
   assert.equal(p.tls.spx, '/');
   assert.equal(p.flow, 'xtls-rprx-vision');
+});
+
+test('REALITY: старый fingerprint и выключенный ML-KEM нормализуются во всех экспортерах', () => {
+  for (const hint of ['', '&support-x25519mlkem768=false', '&support-x25519mlkem768=true']) {
+    const link = REALITY.replace('fp=chrome', 'fp=edge').replace('#', hint + '#');
+    const parsed = parseText(Buffer.from(link).toString('base64'));
+    assert.equal(parsed.errors.length, 0);
+    const p = parsed.proxies[0];
+    assert.equal(p.tls.fp, 'chrome');
+    assert.equal(p.tls.mlkem, true);
+    const xr = buildXray(parsed.proxies, {}).files['04_outbounds.json'].outbounds[0];
+    assert.equal(xr.streamSettings.realitySettings.fingerprint, 'chrome');
+    assert.equal(xr.streamSettings.realitySettings.publicKey, p.tls.pbk);
+    assert.equal(xr.streamSettings.realitySettings.shortId, p.tls.sid);
+    assert.equal(xr.streamSettings.realitySettings.serverName, p.tls.sni);
+    assert.equal(xr.streamSettings.realitySettings.spiderX, '/');
+    assert.equal(xr.settings.vnext[0].users[0].id, p.uuid);
+    assert.equal(xr.settings.vnext[0].users[0].flow, 'xtls-rprx-vision');
+    const mh = buildMihomo(parsed.proxies, { secret: 'x' });
+    assert.equal(mh.config.proxies[0]['client-fingerprint'], 'chrome');
+    assert.deepEqual(mh.config.proxies[0]['reality-opts'], {
+      'public-key': p.tls.pbk, 'short-id': p.tls.sid, 'support-x25519mlkem768': true,
+    });
+    const sb = buildSingbox(parsed.proxies, {}).config.outbounds.find((o) => o.type === 'vless');
+    assert.deepEqual(sb.tls.utls, { enabled: true, fingerprint: 'chrome' });
+    assert.equal(sb.tls.reality.public_key, p.tls.pbk);
+    assert.equal(sb.uuid, p.uuid);
+    assert.equal(sb.flow, p.flow);
+  }
+});
+
+test('REALITY: экспортеры не доверяют устаревшему промежуточному объекту', () => {
+  const p = parseLink(REALITY);
+  p.tls.fp = 'edge';
+  p.tls.mlkem = false;
+  assert.equal(buildXray([p], {}).files['04_outbounds.json'].outbounds[0].streamSettings.realitySettings.fingerprint, 'chrome');
+  const mh = buildMihomo([p], { secret: 'x' }).config.proxies[0];
+  assert.equal(mh['client-fingerprint'], 'chrome');
+  assert.equal(mh['reality-opts']['support-x25519mlkem768'], true);
+  assert.equal(buildSingbox([p], {}).config.outbounds.find((o) => o.type === 'vless').tls.utls.fingerprint, 'chrome');
+});
+
+test('VLESS: неподдерживаемое шифрование не заменяется на none', () => {
+  assert.throws(() => parseLink(REALITY.replace('#', '&encryption=mlkem768x25519plus#')), /шифрование VLESS/);
 });
 
 test('WS + TLS с путём и ALPN', () => {
@@ -119,6 +164,35 @@ test('Xray 26: вместо allowInsecure – отпечаток или пред
   assert.equal(pinned.warnings.length, 0);
 });
 
+test('TLS и Hysteria2: нормализация REALITY не меняет fingerprint и не теряет pin', () => {
+  const pin = 'ab'.repeat(32);
+  const tls = parseLink(WS_TLS.replace('#', '&fp=edge&allowInsecure=1&pcs=' + pin + '#'));
+  assert.equal(tls.tls.fp, 'edge');
+  const mh = buildMihomo([tls], { secret: 'x' }).config.proxies[0];
+  assert.equal(mh['client-fingerprint'], 'edge');
+  assert.equal(mh.fingerprint, pin);
+  assert.equal(mh['skip-cert-verify'], undefined);
+  assert.equal(mh['reality-opts'], undefined);
+  const xr = buildXray([tls], {}).files['04_outbounds.json'].outbounds[0].streamSettings.tlsSettings;
+  assert.equal(xr.fingerprint, 'edge');
+  assert.equal(xr.pinnedPeerCertSha256, pin);
+  const hy = parseLink(HY2.replace('AB:CD:EF', pin));
+  const hp = buildMihomo([hy], { secret: 'x' }).config.proxies[0];
+  assert.equal(hp.fingerprint, pin);
+  assert.equal(hp['client-fingerprint'], undefined);
+  assert.equal(hp['reality-opts'], undefined);
+});
+
+test('sing-box: сертификатный pin не превращается в insecure или другую разновидность hash', () => {
+  const pinnedTls = parseLink(WS_TLS.replace('#', '&pcs=' + 'ab'.repeat(32) + '#'));
+  assert.throws(() => buildSingbox([pinnedTls], {}), /отпечаток сертификата/);
+  assert.throws(() => buildSingbox([parseLink(HY2)], {}), /отпечаток сертификата Hysteria2/);
+  const mixed = buildSingbox([parseLink(REALITY), pinnedTls], {});
+  assert.equal(mixed.count, 1);
+  assert.equal(mixed.skipped.length, 1);
+  assert.ok(!JSON.stringify(mixed.config).includes('insecure'));
+});
+
 test('Mihomo: AmneziaWG 3.1 – имена параметров Mihomo и version: 3', () => {
   const conf = '[Interface]\nPrivateKey = cHJpdg==\nAddress = 10.8.2.2/32\nJc = 3\nJmin = 49\nJmax = 139\nS1 = 141\nS2 = 92\nS3 = 22\nS4 = 18\nH1 = 5\nH2 = 6\nH3 = 7\nH4 = 8\nI1 = <r 89>\nHeaderProtectionKey = a2V5\nRekeyTimeout = 5-6\n[Peer]\nPublicKey = cHVi\nEndpoint = a.example.com:51822\n';
   const r = buildMihomo(parseText('vpn://' + Buffer.from(conf).toString('base64')).proxies, { secret: 'x' });
@@ -169,4 +243,36 @@ test('Mihomo: заголовок для Nikki и для XKeen', () => {
   assert.ok(!nikki.includes('xkeen -restart'));
   const xkeen = buildMihomo(p, { secret: 'x' }).yaml;
   assert.match(xkeen, /# Файл для XKeen: \/opt\/etc\/mihomo\/config.yaml/);
+  assert.match(xkeen, /https:\/\/michaelpnz\.github\.io\/3X-UI_KIT\/tools\//);
+});
+
+test('Команды роутера сохраняют REALITY chrome и ML-KEM', () => {
+  const { routerCommand } = require('../lib/router.js');
+  const p = parseText(REALITY.replace('fp=chrome', 'fp=edge')).proxies;
+  const yaml = buildMihomo(p, { secret: 'x' }).yaml;
+  for (const router of ['keenetic', 'openwrt']) {
+    const cmd = routerCommand(router, 'mihomo', { 'config.yaml': yaml });
+    assert.match(cmd, /client-fingerprint: chrome/);
+    assert.match(cmd, /support-x25519mlkem768: true/);
+    assert.doesNotMatch(cmd, /client-fingerprint: edge/);
+  }
+  const files = Object.fromEntries(Object.entries(buildXray(p, {}).files).map(([name, body]) => [name, JSON.stringify(body)]));
+  assert.match(routerCommand('keenetic', 'xray', files), /"fingerprint":"chrome"/);
+});
+
+test('GitHub Pages: старые адреса генераторов сохраняют project path и query', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  for (const core of ['xray', 'mihomo']) {
+    const html = fs.readFileSync(path.join(__dirname, '..', core, 'index.html'), 'utf8');
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+    for (const suffix of ['/', '/index.html']) {
+      const href = 'https://michaelpnz.github.io/3X-UI_KIT/tools/' + core + suffix + '?router=keenetic&custom=a%20b&core=other#notes';
+      const url = new URL(href);
+      let dest;
+      vm.runInNewContext(script, { URL, location: { href, search: url.search, hash: url.hash, replace: (value) => { dest = value; } } });
+      assert.equal(dest, 'https://michaelpnz.github.io/3X-UI_KIT/tools/?router=keenetic&custom=a+b&core=' + core + '#notes');
+    }
+  }
 });

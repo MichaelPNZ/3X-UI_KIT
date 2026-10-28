@@ -24,7 +24,7 @@
       st.tlsSettings = clean({ serverName: s.sni, fingerprint: s.fp, alpn: s.alpn.length ? s.alpn : undefined, pinnedPeerCertSha256: s.pin || undefined });
     }
     if (s.security === 'reality') {
-      st.realitySettings = clean({ serverName: s.sni, fingerprint: s.fp || 'chrome', publicKey: s.pbk, shortId: s.sid, spiderX: s.spx });
+      st.realitySettings = clean({ serverName: s.sni, fingerprint: 'chrome', publicKey: s.pbk, shortId: s.sid, spiderX: s.spx });
     }
     return st;
   }

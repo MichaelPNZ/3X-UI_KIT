@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 3X-UI со всеми протоколами одной командой – https://github.com/itsnotkubrick/3X-UI_KIT
+# 3X-UI со всеми протоколами одной командой – https://github.com/MichaelPNZ/3X-UI_KIT
 #
-# Установка:  bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)
+# Установка:  bash <(curl -fsSL https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v1.3.0/scripts/3x-ui.sh)
 #
 # Ставит официальную панель 3X-UI (версия закреплена ниже) её собственным
 # установщиком, получает сертификат Let's Encrypt на IP, создаёт подключения
@@ -36,22 +36,22 @@ wait_apt_idle() {
   return 0
 }
 
-XUI_VERSION="v3.10.2"
-# SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-10-19).
+XUI_VERSION="v3.11.0"
+# SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-10-28).
 XUI_INSTALL_SHA256="9684bae4f769b2127fcceceb4f200045657381311867529e6ba76c6b58e2825d"
-KIT_VERSION="1.2.1"
+KIT_VERSION="1.3.0"
 # kit и kit-sub берём из того же релиза, что и этот скрипт, а не из меняющейся ветки main.
-KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$KIT_VERSION"
-# Ядро Xray для панели. С 26.7.x клиенты на Mihomo и sing-box (Hiddify, FlClash,
-# Clash Verge, Mihomo в XKeen) не проходят REALITY – проверено 2026-09-25.
-# 26.6.27 – последняя версия, с которой работают все клиенты и которую принимает 3X-UI.
-XRAY_CORE="v26.6.27"
+KIT_RAW="https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v$KIT_VERSION"
+# Ядро Xray закреплено отдельно от панели. REALITY требует ML-KEM ClientHello:
+# используйте chrome и актуальный клиент; Mihomo также требует support-x25519mlkem768: true.
+# Подтверждённые версии и ограничения: manuals/panel-v3.11.0.md.
+XRAY_CORE="v26.10.21"
 # SHA256 архивов этой версии ядра (из официальных файлов .dgst релиза Xray-core). Запасной путь
 # через зеркало ставит архив, только если сумма совпала: зеркалу верить не нужно.
 # При смене XRAY_CORE обновите суммы: tools/release.sh сверяет их с официальными.
 declare -A XRAY_ZIP_SHA256=(
-  [64]=b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf
-  [arm64-v8a]=13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931
+  [64]=0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978
+  [arm64-v8a]=d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c
 )
 XRAY_MIRRORS=("https://github.com" "https://ghfast.top/https://github.com")
 XUI_REPO="MHSanaei/3x-ui"
@@ -507,7 +507,7 @@ ART
   printf '%s' "$N"
   echo
   echo "${B}3X-UI KIT $KIT_VERSION${N}  ·  it's not Kubrick. it's just a VPN."
-  echo "${D}на основе панели 3X-UI (MHSanaei/3x-ui) и ядра Xray · github.com/itsnotkubrick/3X-UI_KIT${N}"
+  echo "${D}на основе панели 3X-UI (MHSanaei/3x-ui) и ядра Xray · github.com/MichaelPNZ/3X-UI_KIT${N}"
 }
 
 main() {
@@ -762,7 +762,7 @@ main() {
   wait_apt_idle
   apt_refresh
   spin_start "Ставлю пакеты"
-  apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron unzip >/dev/null
+  apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron unzip python3 python3-yaml >/dev/null
   spin_stop
   ok "curl, jq, openssl, qrencode, ufw и другое"
 
@@ -829,9 +829,8 @@ main() {
   # --- сертификат для протоколов с TLS ---
   setup_tls_cert
   ok "ядро закреплено, сертификат для протоколов с TLS готов"
-  say "${D}Ядро Xray ${XRAY_CORE#v} – не самое новое, и это намеренно.${N}"
-  say "${D}На новых версиях клиенты на sing-box (Karing, Hiddify) перестают подключаться${N}"
-  say "${D}по REALITY и ещё нескольким протоколам. Перейдём на новое, когда это исправят.${N}"
+  say "${D}REALITY требует клиента с X25519MLKEM768 и fingerprint chrome.${N}"
+  say "${D}Mihomo: support-x25519mlkem768: true. Подробности: manuals/panel-v3.11.0.md.${N}"
 
   # --- подключения: все выбранные протоколы, один subId на пользователя ---
   step "Подключения"
@@ -1007,7 +1006,7 @@ install_xui() { # порт путь логин пароль
   say "Ставлю 3X-UI $XUI_VERSION официальным установщиком (пара минут)"
   curl -fsSL --retry 3 -o "$tmp/install.sh" "https://raw.githubusercontent.com/$XUI_REPO/$XUI_VERSION/install.sh"
   [[ $(sha256sum "$tmp/install.sh" | awk '{print $1}') == "$XUI_INSTALL_SHA256" ]] \
-    || die "Установщик 3X-UI $XUI_VERSION не совпал с проверенным (SHA256) – не запускаю. Сообщите нам: github.com/itsnotkubrick/3X-UI_KIT/issues"
+    || die "Установщик 3X-UI $XUI_VERSION не совпал с проверенным (SHA256) – не запускаю. Сообщите нам: github.com/MichaelPNZ/3X-UI_KIT/issues"
   # В архиве панели лежит новое ядро; у установщика нет параметра, сохраняющего наше.
   # Сначала проверяем закреплённое ядро, затем вставляем его до config_after_install:
   # эта функция уже может перезапустить панель при настройке сертификата.
@@ -1092,7 +1091,7 @@ set_xray_core() {
   local cur_core
   cur_core=$(/usr/local/x-ui/bin/xray-linux-* version 2>/dev/null | awk 'NR==1 {print "v" $2}')
   if [[ $cur_core != "$XRAY_CORE" ]]; then
-    say "Ставлю ядро Xray $XRAY_CORE (совместимо с Hiddify, Mihomo и другими клиентами)"
+    say "Ставлю закреплённое ядро Xray $XRAY_CORE; для REALITY нужен современный клиент с ML-KEM."
     # 3X-UI 3.9 бывает отвечает ошибкой «GitHub API error», хотя ядро уже заменено: ответ не считаем
     # проверкой, смотрим на версию ядра ниже.
     spin_start "Ставлю ядро Xray"
@@ -1108,7 +1107,7 @@ set_xray_core() {
       xray_install_fallback
       cur_core=$(/usr/local/x-ui/bin/xray-linux-* version 2>/dev/null | awk 'NR==1 {print "v" $2}')
     fi
-    [[ $cur_core == "$XRAY_CORE" ]] || die "Не удалось установить закреплённое ядро Xray $XRAY_CORE (сейчас $cur_core). Останавливаю установку: клиенты на Mihomo и sing-box могут не подключиться."
+    [[ $cur_core == "$XRAY_CORE" ]] || die "Не удалось установить закреплённое ядро Xray $XRAY_CORE (сейчас $cur_core). Версия не подтверждена, установка остановлена."
   fi
 }
 
@@ -1509,7 +1508,7 @@ install_kit_file() {
   bash -n /usr/local/bin/kit || die "Команда kit скачалась повреждённой"
 }
 
-KIT_INSTALL_CMD="bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)"
+KIT_INSTALL_CMD="bash <(curl -fsSL https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v1.3.0/scripts/3x-ui.sh)"
 
 # После «x-ui → Uninstall» меню подсказывает команду официального установщика –
 # меняем её на нашу. Только в echo: вызов установщика в «Update» не трогаем.
@@ -1820,7 +1819,14 @@ setup_subscription() {
     systemctl restart x-ui
     wait_panel
   fi
-  [[ $TRUSTED == yes ]] && install_kit_sub
+  if [[ $TRUSTED == yes ]]; then install_kit_sub
+  else
+    # SSH-only: тот же код подписки нужен для прямых ссылок, публичную службу не запускаем.
+    install_kit_sub_file
+    jq -n --arg up "http://127.0.0.1:$SUB_PORT" --arg path "$SUB_PATH" \
+      '{upstream: $up, path: $path, port: 0, listen: "127.0.0.1"}' >/etc/kit-sub/config.json
+    chmod 600 /etc/kit-sub/config.json
+  fi
   if [[ $SINGLE == yes ]]; then SUB_URL="https://$HOST$SUB_PATH$SUBID"
   elif [[ $TRUSTED == yes ]]; then SUB_URL="https://$HOST:$SUB_PORT$SUB_PATH$SUBID"; else SUB_URL="http://127.0.0.1:$SUB_PORT$SUB_PATH$SUBID"; fi
   SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://$HOST:$SUB_PORT$SUB_PATH$SUBID"
@@ -1915,11 +1921,10 @@ install_kit_sub() {
 # Ссылки пользователя – прямо из подписки 3X-UI внутри сервера (мимо kit-sub, который
 # прячет от VPN-приложений vpn:// и tg://). sub_links subId [попыток]
 sub_links() {
-  local id=$1 tries=${2:-20} raw="" i port=${SUB_INTERNAL:-$SUB_PORT} scheme=http
-  [[ -z ${SUB_INTERNAL:-} && $TRUSTED == yes ]] && scheme=https
+  local id=$1 tries=${2:-20} raw="" i
   for i in $(seq 1 "$tries"); do
-    # Настоящий адрес в Host – 3X-UI подставит его в ссылки.
-    raw=$(curl -fsSk -m 10 -A "v2rayN/7.0" -H "Host: ${LINK_HOST:-$HOST}:$SUB_PORT" "$scheme://127.0.0.1:$port$SUB_PATH$id" 2>/dev/null) && [[ -n $raw ]] && break
+    raw=$(KIT_SUB_CONFIG=/etc/kit-sub/config.json python3 /usr/local/lib/kit-sub/kit_sub.py \
+      --links "$id" "${LINK_HOST:-$HOST}:$SUB_PORT") && [[ -n $raw ]] && break
     raw=""; sleep 2
   done
   if grep -q '://' <<<"$raw"; then echo "$raw"; else base64 -d <<<"$raw" 2>/dev/null || true; fi

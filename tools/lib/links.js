@@ -82,6 +82,10 @@
       s.pin = (q.get('pcs') || q.get('pinSHA256') || '').replace(/:/g, '').toLowerCase();
     }
     if (security === 'reality') {
+      // KIT 1.3.0 / Xray 26.10.21 requires a hybrid ML-KEM ClientHello. Older
+      // presets and an explicit false hint must not survive into generated configs.
+      s.fp = 'chrome';
+      s.mlkem = true;
       s.pbk = q.get('pbk') || '';
       if (!s.pbk) throw new Error('в ссылке REALITY нет публичного ключа (pbk)');
       s.sid = q.get('sid') || '';

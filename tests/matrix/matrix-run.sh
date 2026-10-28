@@ -13,7 +13,8 @@ t() { # client port cmd...
   pkill -x xray; pkill -x mihomo; pkill -x sing-box; sleep 0.5
   if [[ $code == 204 ]]; then echo "✓"; else echo "✗ $(grep -i -m1 -E 'error|fail|fatal|invalid' /tmp/c.log | cut -c1-90)"; fi
 }
-printf '%-32s %-40s %-40s %s\n' "протокол" "Xray 26.6.27" "Mihomo" "sing-box"
+xray_label=$(/cl/xray version | awk 'NR == 1 {print $1 " " $2}')
+printf '%-32s %-40s %-40s %s\n' "протокол" "${xray_label:-Xray (версия неизвестна)}" "Mihomo" "sing-box"
 for d in */; do
   d=${d%/}
   x='–'; m='–'; s='–'

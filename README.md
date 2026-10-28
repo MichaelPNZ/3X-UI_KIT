@@ -4,12 +4,11 @@
 
 **Установка 3X-UI одной командой: 11 протоколов, один порт 443, одна подписка на всё**
 
-[![Версия](https://img.shields.io/github/v/release/itsnotkubrick/3X-UI_KIT?label=3X-UI%20KIT&color=93E06F&labelColor=221B17)](https://github.com/itsnotkubrick/3X-UI_KIT/releases/latest)
+[![Версия](https://img.shields.io/github/v/release/MichaelPNZ/3X-UI_KIT?label=3X-UI%20KIT&color=93E06F&labelColor=221B17)](https://github.com/MichaelPNZ/3X-UI_KIT/releases/latest)
 [![Протоколов](https://img.shields.io/badge/протоколов-11-93E06F?labelColor=221B17)](manuals/3x-ui.md#протоколы)
-[![3X-UI](https://img.shields.io/badge/3X--UI-v3.10.2-93E06F?labelColor=221B17)](https://github.com/MHSanaei/3x-ui)
-[![Звёзды](https://img.shields.io/github/stars/itsnotkubrick/3X-UI_KIT?label=звёзды&style=flat&color=93E06F&labelColor=221B17)](https://github.com/itsnotkubrick/3X-UI_KIT/stargazers)
-[![Обновлено](https://img.shields.io/github/last-commit/itsnotkubrick/3X-UI_KIT?label=обновлено&color=93E06F&labelColor=221B17)](https://github.com/itsnotkubrick/3X-UI_KIT/commits)
-[![Поддержать](https://img.shields.io/badge/поддержать-💜-8A66C4?labelColor=221B17)](#поддержать-проект)
+[![3X-UI](https://img.shields.io/badge/3X--UI-v3.11.0-93E06F?labelColor=221B17)](https://github.com/MHSanaei/3x-ui/releases/tag/v3.11.0)
+[![Звёзды](https://img.shields.io/github/stars/MichaelPNZ/3X-UI_KIT?label=звёзды&style=flat&color=93E06F&labelColor=221B17)](https://github.com/MichaelPNZ/3X-UI_KIT/stargazers)
+[![Обновлено](https://img.shields.io/github/last-commit/MichaelPNZ/3X-UI_KIT?label=обновлено&color=93E06F&labelColor=221B17)](https://github.com/MichaelPNZ/3X-UI_KIT/commits)
 
 </div>
 
@@ -20,21 +19,20 @@
 > к серверам. Вы ставите его на собственный сервер и сами отвечаете за соблюдение законодательства
 > своей страны. Проект создан в образовательных целях.
 
-> [!TIP]
-> **Вышла версия 1.2.1:** выбор протоколов при установке, полное удаление, меню вместо команд и исправления установки.
-> [Что нового](https://github.com/itsnotkubrick/3X-UI_KIT/releases/tag/v1.2.1)
->
-> **Сменился ключ подписи релизов, поэтому сервер на версии 1.2 и ниже сам не обновится.** Один раз выполните на
-> сервере эту команду, и дальше автообновление снова заработает:
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2.1/scripts/kit.sh -o /usr/local/bin/kit && chmod 755 /usr/local/bin/kit && kit update
-> ```
-> Новая установка ничего не требует.
+> [!IMPORTANT]
+> **Подготовлен релиз форка 1.3.0:** панель 3X-UI v3.11.0 и Xray v26.10.21.
+> Публичный ключ форка уже настроен. Пока владелец не проверит его, не подпишет файлы и не опубликует тег `v1.3.0`,
+> команды этого релиза ещё не предназначены для установки. [Изменения](CHANGELOG.md#v130) ·
+> [подготовка выпуска](manuals/release.md).
+
+Это самостоятельный **форк [itsnotkubrick/3X-UI_KIT](https://github.com/itsnotkubrick/3X-UI_KIT)**.
+Развитие и подписанные обновления форка находятся в [MichaelPNZ/3X-UI_KIT](https://github.com/MichaelPNZ/3X-UI_KIT).
+Авторство исходного проекта и его лицензия MIT сохранены: [LICENSE](LICENSE), [NOTICE.md](NOTICE.md).
 
 **3X-UI KIT** превращает чистый VPS в готовый VPN-сервер за несколько минут. Скрипт ставит
 официальную панель [3X-UI](https://github.com/MHSanaei/3x-ui), настраивает все популярные
 протоколы, сертификат и файрвол и выдаёт одну ссылку-подписку. Её можно вставить в любое
-приложение – оно само получит подходящие ему протоколы. Домен не нужен.
+совместимое приложение – оно само получит подходящие ему протоколы. Домен не нужен.
 
 <div align="center">
 <img alt="Конец установки 3X-UI KIT" src="manuals/assets/script-3x-ui.svg" width="760">
@@ -57,7 +55,7 @@
   срок и число устройств. Меню `kit` работает как у x-ui: выбрали цифру – готово.
 - 💾 **Резервная копия и переезд на новый сервер одной командой.** Копия сохраняет подключения, ключи
   и пользователей, а на чистом VPS (даже с другим IP) сервер поднимается из неё за несколько минут.
-- 🔄 **Обновляется само, но только подписанными релизами.**
+- 🔄 **KIT и подписка обновляются только подписанными релизами форка.** Панель и ядро обновляются отдельными командами.
 - 🩺 **Проверка и починка сервера** из меню `kit`.
 - 🧹 **Полное удаление.** Пункт «Удалить KIT с сервера» убирает панель, подписку, настройки и сертификаты, а ваш SSH и чужие сертификаты не трогает.
 
@@ -66,9 +64,6 @@
 - VPS с **Ubuntu 22.04/24.04** или **Debian 12/13** и доступом root по SSH
 - Свободные порты **443** и **80** – на свежем сервере они свободны
 
-Нужен VPS? Я сам использую **[IS Hosting](https://ishosting.io/affiliate/NTg4MiM4)** и рекомендую его
-(реферальная ссылка).
-
 ## Установка
 
 Подключитесь к серверу по SSH и выполните одну команду на чистом VPS.
@@ -76,11 +71,33 @@
 Панель 3X-UI, все протоколы на порту 443 и одна подписка на всё:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2.1/scripts/3x-ui.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v1.3.0/scripts/3x-ui.sh)
 ```
 
 Через пару минут скрипт покажет адрес панели, логин, пароль и подписку с QR-кодом.
 Подробно – подключение приложений, дополнительные пользователи и параметры – в **[инструкции](manuals/3x-ui.md)**.
+
+### Переход с оригинального KIT 1.2.x
+
+У форка другой ключ подписи. Оригинальные установки не начнут доверять ему автоматически.
+После публикации подписанного `v1.3.0` сохраните `kit backup`, проверьте адрес форка и один раз
+замените команду `kit` вручную от root:
+
+```bash
+(
+  set -eu
+  kit_tmp=$(mktemp)
+  trap 'rm -f "$kit_tmp"' EXIT
+  curl -fsSL https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v1.3.0/scripts/kit.sh -o "$kit_tmp"
+  bash -n "$kit_tmp"
+  install -m 755 "$kit_tmp" /usr/local/bin/kit
+  kit update
+)
+```
+
+Эта команда вручную устанавливает доверие к ключу форка. Затем `kit update` обновляет KIT и
+kit-sub из подписанного релиза MichaelPNZ; панель и Xray остаются прежними. Дальнейший порядок:
+`kit panel update`, проверка приложений, затем отдельный `kit core update`.
 
 ## Управление: меню `kit`
 
@@ -93,7 +110,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.2
 - **Удалить KIT с сервера.**
 
 > [!IMPORTANT]
-> Обновляйте панель и ядро только через `kit` («Обновить kit и подписку»). Пункт обновления в меню `x-ui` ставит самую новую панель вместе с самым новым ядром Xray, на котором часть приложений (Karing, Hiddify и другие на sing-box) перестаёт подключаться. Если уже обновили через `x-ui`: `kit` → «Проверка сервера» → «Исправить безопасное» вернёт проверенное ядро.
+> `kit update` обновляет KIT и подписку. `kit panel update` обновляет панель, сохраняя текущее ядро.
+> `kit core update` отдельно ставит закреплённый Xray с проверкой SHA256 и откатом при неудаче.
+> Перед сменой ядра обновите приложения и их подписки: REALITY нового Xray требует ML-KEM в ClientHello.
+> KIT выдаёт `fingerprint=chrome`, а для Mihomo также `support-x25519mlkem768: true`.
+> Подтверждённые версии и ограничения — в [проверке совместимости](manuals/panel-v3.11.0.md#клиенты-и-reality).
 
 Все команды (для скриптов и тех, кому так привычнее) и разбор «Если не подключается» – в **[инструкции](manuals/3x-ui.md)**.
 
@@ -223,9 +244,9 @@ sh -c "$(curl -sSL https://raw.githubusercontent.com/jameszeroX/XKeen/main/insta
 
 | Роутер | Ядро | Что получится | Генератор |
 |---|---|---|---|
-| Keenetic (XKeen) | Xray | `04_outbounds.json` и `05_routing.json`: серверы, выбор сервисов, реклама, свои сайты | [Открыть →](https://itsnotkubrick.github.io/3X-UI_KIT/tools/?core=xray) |
-| Keenetic (XKeen) | Mihomo | `config.yaml` с автовыбором сервера, подпиской, Hysteria2, AmneziaWG и веб-панелью | [Открыть →](https://itsnotkubrick.github.io/3X-UI_KIT/tools/?core=mihomo) |
-| OpenWrt (Nikki), бета | Mihomo | профиль для Nikki и команда, которая его включит | [Открыть →](https://itsnotkubrick.github.io/3X-UI_KIT/tools/?router=openwrt) |
+| Keenetic (XKeen) | Xray | `04_outbounds.json` и `05_routing.json`: серверы, выбор сервисов, реклама, свои сайты | [Открыть →](https://michaelpnz.github.io/3X-UI_KIT/tools/?core=xray) |
+| Keenetic (XKeen) | Mihomo | `config.yaml` с автовыбором сервера, подпиской, Hysteria2, AmneziaWG и веб-панелью | [Открыть →](https://michaelpnz.github.io/3X-UI_KIT/tools/?core=mihomo) |
+| OpenWrt (Nikki), бета | Mihomo | профиль для Nikki и команда, которая его включит | [Открыть →](https://michaelpnz.github.io/3X-UI_KIT/tools/?router=openwrt) |
 
 ## Полезное
 
@@ -233,24 +254,18 @@ sh -c "$(curl -sSL https://raw.githubusercontent.com/jameszeroX/XKeen/main/insta
 - [XKeen UI](https://github.com/zxc-rv/XKeen-UI) – веб-интерфейс для XKeen
 - [IP-адреса для AmneziaWG](https://github.com/RockBlack-VPN/ip-address) – актуальные списки от RockBlack
 
-## Поддержать проект
+## Поддержка форка
 
-Скрипты и инструкции бесплатные. Донат добровольный – он помогает оплачивать
-тестовые серверы и держать скрипты в актуальном состоянии. Спасибо! 💜
-
-| Способ | |
-|---|---|
-| Российской картой, СБП, Tinkoff Pay | [Tribute](https://t.me/tribute/app?startapp=dRsY) |
-| Зарубежной картой, Apple Pay, Google Pay | [Buy Me a Coffee](https://buymeacoffee.com/itsnotkubrick) |
-| USDT (TRC-20) | `TS83ViXrdezUpp1eFadqj1rBhGLZaba1c1` |
-| TON | `UQBchO4XFPwF9MMa_tjXpwqTo8IL2FhUDyllhYuFo8WM-Qbf` |
-| Ethereum (ERC-20) | `0xC06F6B3A029d7Ea00705B7028490744e2BC16799` |
+Ошибки и предложения: [Issues MichaelPNZ/3X-UI_KIT](https://github.com/MichaelPNZ/3X-UI_KIT/issues).
+Сообщения об уязвимостях: [SECURITY.md](SECURITY.md). Платёжные реквизиты и реферальные ссылки
+автора оригинала удалены из этой версии; они не являются контактами или донатами владельца форка.
 
 Лицензия: MIT, см. [LICENSE](LICENSE). Сторонние компоненты – [NOTICE.md](NOTICE.md).
 
 ## Благодарности
 
-3X-UI KIT построен на работе авторов этих проектов:
+Основа форка — [3X-UI KIT автора itsnotkubrick](https://github.com/itsnotkubrick/3X-UI_KIT).
+KIT также построен на работе авторов этих проектов:
 [3X-UI](https://github.com/MHSanaei/3x-ui) ·
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [Mihomo](https://github.com/MetaCubeX/mihomo) ·

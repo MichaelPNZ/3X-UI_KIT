@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kit – управление сервером 3X-UI KIT: пользователи, обновление, резервная копия.
-# https://github.com/itsnotkubrick/3X-UI_KIT
+# https://github.com/MichaelPNZ/3X-UI_KIT
 #
 #   kit user add имя [--gb 50] [--days 30] [--devices 3]
 #   kit user list | link имя | limit имя [--gb N] [--days N] | off имя | on имя | del имя
@@ -12,10 +12,10 @@
 set -Eeuo pipefail
 export LC_ALL=C.UTF-8  # ширина колонок по символам, а не байтам
 
-KIT_VERSION="1.2.1"
-KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main"
+KIT_VERSION="1.3.0"
+KIT_RAW="https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/main"
 # Файлы новой версии берём из её тега, а не из меняющейся ветки main.
-kit_ref_raw() { echo "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$1"; }
+kit_ref_raw() { echo "https://raw.githubusercontent.com/MichaelPNZ/3X-UI_KIT/v$1"; }
 
 XUI_ENV=/etc/x-ui/install-result.env
 KIT_ENV=/etc/kit/kit.env
@@ -23,13 +23,19 @@ KIT_LATEST=/etc/kit/latest-version
 
 # Проверенные версии: kit panel update ставит именно их, kit check предупреждает о других.
 # Суммы архива панели и x-ui.sh сверяет tools/release.sh с официальными (перед каждым выпуском).
-XUI_PIN="v3.10.2"
-XRAY_PIN="v26.6.27"
+XUI_PIN="v3.11.0"
+XRAY_PIN="v26.10.21"
 declare -A XUI_TARBALL_SHA256=(
-  [amd64]=bfda7921984e7a72555c38d4e861c7a8b67b3686b658608937de99682f1452d0
-  [arm64]=a867c65ce52ad49f6504dd4c9c395337dc92ba57ae478da4f1b7ddb624014ed5
+  [amd64]=0ddfa4702f595442e2962acd81addc768fdacaa4ff2672c971a0463dae744916
+  [arm64]=f50b4c30fd919d018f2f4c3d8db53a4ca027503d581328727770afb116a79d90
 )
-XUI_SH_SHA256=3c7dabe7ea9edf0d950eff1caffbf203a1f8b52e98fc75e203372757f47998c0
+XUI_SH_SHA256=26c229d5fb3b184e81581b4b223b801582ca7cf5908aaedeb8d1c7c70ad4cc25
+# Официальные архивы ядра; одинаковые пины и суммы используются при новой установке.
+declare -A XRAY_ZIP_SHA256=(
+  [64]=0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978
+  [arm64-v8a]=d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c
+)
+XRAY_MIRRORS=("https://github.com" "https://ghfast.top/https://github.com")
 
 if [[ -t 1 ]]; then
   G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -199,15 +205,29 @@ sub_url() { echo "${SUB_BASE}$1"; }
 
 # Отдельные ссылки на протоколы – прямо из подписки 3X-UI внутри сервера (мимо kit-sub, который
 # прячет от VPN-приложений vpn:// и tg://). collect_links subId фильтр – печатает подходящие строки.
+subscription_links() { # полный список через общий код kit-sub, без запуска службы
+  local sid=$1 cfg=/etc/kit-sub/config.json tmp="" status=0 scheme=http
+  local script=/usr/local/lib/kit-sub/kit_sub.py
+  [[ -f $script ]] && grep -q '^def cli_links(' "$script" \
+    || { warn "Для ссылок нужен kit-sub 1.3.0: выполните kit update."; return 1; }
+  if [[ ! -f $cfg ]]; then
+    tmp=$(mktemp) || return 1
+    cfg=$tmp
+    [[ -n ${SUB_CERT:-} ]] && scheme=https
+    jq -n --arg up "$scheme://127.0.0.1:$SUB_INTERNAL" --arg path "$SUB_PATH" \
+      '{upstream: $up, path: $path, port: 0}' >"$cfg" || { rm -f "$tmp"; return 1; }
+  fi
+  KIT_SUB_CONFIG="$cfg" python3 "$script" --links "$sid" "${LINK_HOST:-$HOST}" || status=$?
+  [[ -z $tmp ]] || rm -f "$tmp"
+  return "$status"
+}
+
 collect_links() {
   local sid=$1 filter=$2 raw out="" suffix scheme
   for suffix in "" -awg; do
     raw=""
     # Внутренняя подписка отвечает по http (всё на 443) или по https (свой порт с сертификатом).
-    for scheme in http https; do
-      raw=$(curl -fsSk -m 10 -A "v2rayN/7" -H "Host: ${LINK_HOST:-$HOST}" "$scheme://127.0.0.1:$SUB_INTERNAL$SUB_PATH$sid$suffix" 2>/dev/null) && [[ -n $raw ]] && break
-      raw=""
-    done
+    raw=$(subscription_links "$sid$suffix") || raw=""
     grep -q '://' <<<"$raw" || raw=$(base64 -d <<<"$raw" 2>/dev/null || true)
     out+=$(grep -E "$filter" <<<"$raw" || true)$'\n'
   done
@@ -520,13 +540,12 @@ cmd_del() {
 
 # ---------- версия и обновление ----------
 
-# Открытый ключ, которым автор подписывает релизы (ssh-keygen -Y sign). Закрытая часть
-# есть только у автора, поэтому подменить обновление, взломав один GitHub, не выйдет.
-# Обычная смена ключа идёт релизом, подписанным старым. В 1.2.1 так не вышло: прежний ключ утерян, поэтому
-# серверы на 1.2 и ниже переходят вручную (команда в README, kit.sh берётся с тега по HTTPS).
+# Ключ подписи самостоятельного форка MichaelPNZ. Оригинальный ключ не доверенный.
+# Приватная часть хранится только у владельца; в KIT находится только публичный ключ.
+# Оригинальные серверы 1.2.x переходят на форк вручную: команда в README.
 KIT_SIGNERS=(
-  # SHA256:bNjI10eGVGjdFeDJnAHvUFi73rlrXVy6vKFf8lmNyxU (itsnotkubrick, 2026-10-14; прежний ключ SHA256:VDuGgJ8d… утерян, снят)
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEWDFGq2Wno/ADRS2E6UKsgFbUSLvaiPIfRBvSEGJr81 3X-UI KIT releases"
+  # SHA256:djDjuaSolHrl64v4UNojFoS2SLMK1ailFn0sNuLEPHo (MichaelPNZ, 2026-10-28)
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBtnfWRBFLYscAoCq2BZKttlax6YZ/QU7VQkNpIiO2gx 3X-UI KIT releases"
 )
 KIT_SIG_NS="3x-ui-kit-release"
 KIT_SIG_ID="releases@3x-ui-kit"
@@ -578,6 +597,7 @@ changelog_of() {
 fetch_release() { # версия каталог
   local v=$1 d=$2 raw f sum k
   ((${#KIT_SIGNERS[@]})) || { warn "В этой сборке kit нет ключа подписи – проверить обновление нечем."; return 1; }
+  [[ "${KIT_SIGNERS[*]}" != *REPLACE_WITH_* ]] || { warn "Публичный ключ релизов форка ещё не настроен – обновление запрещено."; return 1; }
   command -v ssh-keygen >/dev/null || { warn "Нет ssh-keygen (пакет openssh-client) – подпись не проверить."; return 1; }
   raw=$(kit_ref_raw "$v")
   curl -fsSL --retry 3 -o "$d/SHA256SUMS" "$raw/SHA256SUMS" && curl -fsSL --retry 3 -o "$d/SHA256SUMS.sig" "$raw/SHA256SUMS.sig" \
@@ -731,8 +751,7 @@ cmd_update() {
   done
   [[ $panel == no ]] || { panel_update ${force:+--force}; return; }
   # Ночной запуск и ручной не должны встретиться.
-  exec 9>/run/kit-update.lock
-  flock -n 9 || die "Обновление уже идёт."
+  update_lock
   [[ $unattended == yes ]] && echo "--- $(date '+%F %T') kit $KIT_VERSION: проверяю обновления"
   # Ночной запуск убирает прежние имена сайта, у которых закончился льготный срок (kit net site).
   (grace_cleanup) || true
@@ -756,9 +775,12 @@ cmd_update() {
   spin_stop
   bash -n "$tmp/kit.sh" && python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$tmp/kit-sub.py" \
     || die "Файлы релиза не прошли проверку синтаксиса – сервер не тронут."
+  python3 -c 'import yaml' >/dev/null 2>&1 \
+    || apt-get -o DPkg::Lock::Timeout=900 install -y -qq python3-yaml \
+    || die "Не удалось подготовить python3-yaml для подписки. Файлы KIT не заменены."
 
   # Подписка kit-sub: ставим новую, проверяем, что отвечает, иначе возвращаем старую.
-  if [[ -f /usr/local/lib/kit-sub/kit_sub.py ]]; then
+  if [[ -f /usr/local/lib/kit-sub/kit_sub.py && -f /etc/systemd/system/kit-sub.service ]]; then
     # Отвечала ли подписка ДО замены: если нет (например, у встроенной подписки панели включён TLS), откат ничего не даст.
     local old_ok=yes sub_fail=no
     sub_ok || old_ok=no
@@ -801,6 +823,10 @@ cmd_update() {
       systemctl restart kit-sub || true
       die "Новая подписка не ответила – вернул прежнюю, kit остался версии $KIT_VERSION. Лог: journalctl -u kit-sub -n 30"
     fi
+  else
+    # SSH-only: библиотека формирует прямые ссылки; публичную службу не создаём.
+    install -d -m 755 /usr/local/lib/kit-sub
+    install -m 644 "$tmp/kit-sub.py" /usr/local/lib/kit-sub/kit_sub.py
   fi
 
   # Исправления для установок 1.0.
@@ -824,7 +850,7 @@ cmd_update() {
   # Новые пути подписки (Clash и JSON) подключает уже новая версия kit.
   /usr/local/bin/kit __subextra >/dev/null 2>&1 || warn "Дополнительные пути подписки не подключились: kit update --force"
   echo
-  echo "${G}✓ Готово: 3X-UI KIT $latest.${N} Пользователи, ссылки и подписки не менялись."
+  echo "${G}✓ Готово: 3X-UI KIT $latest.${N} Подписки формируются новой версией KIT; версии панели и ядра сохранены."
   [[ $unattended == yes ]] && return
   local news
   news=$(changelog_of "$latest")
@@ -872,7 +898,7 @@ xray_restart_core() { # только ядро, панель не трогаем;
 }
 
 # Панель 3.9.0 меняет подключение на ходу через API ядра: старое удаляет, а новое с маскировкой Hysteria2
-# ядро 26.6.27 не принимает (форматы настроек у панели и ядра разошлись), и порт закрывается. Сама панель
+# внешнее ядро не принимает, и порт закрывается. Сама панель
 # ядро не перезапускает: config.json уже верный. Поэтому после правки сверяем порты и при нужде перезапускаем ядро.
 xray_heal() { # «было-не-слушало» (вывод inbounds_down до правки)
   local before=${1:-} down new
@@ -943,7 +969,8 @@ check_services() {
   if [[ ${SINGLE:-no} == yes ]]; then
     if systemctl is-active -q nginx; then c_ok "nginx работает"; else c_bad svc:nginx "nginx не работает (journalctl -u nginx -n 50)"; fi
   fi
-  if [[ -f /usr/local/lib/kit-sub/kit_sub.py ]]; then
+  if [[ -f /usr/local/lib/kit-sub/kit_sub.py && -f /etc/kit-sub/config.json \
+      && $(jq -r '.port // 0' /etc/kit-sub/config.json) != 0 ]]; then
     if systemctl is-active -q kit-sub; then
       c_ok "служба kit-sub работает"
       pid=$(systemctl show -p MainPID --value kit-sub 2>/dev/null || true)
@@ -966,9 +993,8 @@ check_services() {
 check_versions() {
   local xv pv; xv=$(xray_version || true); pv=$(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1 || true)
   c_info "kit $KIT_VERSION, панель 3X-UI ${pv:-?}, ядро Xray ${xv:-?}"
-  if [[ -n $xv ]] && newer "$xv" "$XRAY_PIN"; then
-    c_warn "ядро Xray $xv новее проверенного (${XRAY_PIN#v}): клиенты на Mihomo и sing-box могут не подключаться к REALITY (kit → Проверка сервера → Исправить безопасное вернёт проверенное)"
-    CHECK_FIX+=(core)
+  if [[ -n $xv && $xv != "$XRAY_PIN" ]]; then
+    c_warn "ядро Xray $xv отличается от закреплённого $XRAY_PIN. Явное обновление: kit core update (REALITY требует современных клиентов с ML-KEM)."
   fi
   if [[ -n $pv ]] && newer "v${pv#v}" "$XUI_PIN"; then
     c_warn "панель 3X-UI $pv новее проверенной (${XUI_PIN#v}): часть команд kit может работать иначе"
@@ -1027,6 +1053,87 @@ sub_body_ok() { # файл приложение
   esac
 }
 
+tuic_expected() { # JSON inbounds/list -> subId, UUID; секреты не печатаются в отчёт
+  python3 -c '
+import json,re,sys,time
+rows=json.load(sys.stdin)
+if not isinstance(rows,list): sys.exit(1)
+now=int(time.time()*1000); found=set(); skipped=set()
+for row in rows:
+    if row.get("protocol")!="tuic" or not row.get("enable",True) or row.get("excludeFromSub",False): continue
+    settings=row.get("settings",{})
+    if isinstance(settings,str): settings=json.loads(settings)
+    stats={s.get("email"):s for s in row.get("clientStats") or [] if isinstance(s,dict)}
+    for c in settings.get("clients") or []:
+        t=stats.get(c.get("email"),{})
+        if not c.get("enable",True) or not t.get("enable",True): continue
+        expiry=c.get("expiryTime",0) or t.get("expiryTime",0) or 0
+        total=c.get("totalGB",0) or t.get("total",0) or 0
+        if expiry>0 and expiry<=now: continue
+        if total>0 and (t.get("up",0)+t.get("down",0))>=total: continue
+        sid=c.get("subId",""); uid=c.get("uuid") or c.get("id","")
+        if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}",sid) or not re.fullmatch(r"[A-Fa-f0-9-]{36}",uid): continue
+        # Индивидуальные Hosts могут намеренно скрывать raw-ссылку, включая tombstones.
+        # Без полного Host resolver не объявляем такие профили потерянными.
+        if c.get("clientHostRuleIds"):
+            skipped.add((sid,uid.lower())); continue
+        found.add((sid,uid.lower()))
+for sid,uid in sorted(found): print(sid+"\t"+uid)
+if skipped: print("!SKIP\t"+str(len(skipped)))
+'
+}
+
+tuic_link_present() { # файл raw/base64, ожидаемый UUID
+  python3 - "$1" "$2" <<'PY'
+import base64,sys
+from urllib.parse import unquote,urlsplit
+text=open(sys.argv[1],encoding="utf-8").read().strip()
+if "://" not in text:
+    try: text=base64.b64decode(text+"="*(-len(text)%4),validate=True).decode()
+    except (ValueError,UnicodeError): sys.exit(1)
+for line in text.splitlines():
+    if not line.startswith("tuic://"): continue
+    try:
+        u=urlsplit(line)
+        if unquote(u.username or "").lower()==sys.argv[2] and u.password and u.hostname and u.port: sys.exit(0)
+    except ValueError: pass
+sys.exit(1)
+PY
+}
+
+SUB_TUIC_CHECKED=0
+SUB_TUIC_SKIPPED=0
+tuic_subscription_healthy() {
+  local expected sid uid body cfg=/etc/kit-sub/config.json port=0 path=$SUB_PATH scheme=http previous="" code ok=yes
+  SUB_TUIC_CHECKED=0
+  SUB_TUIC_SKIPPED=0
+  expected=$(api GET inbounds/list | tuic_expected) || return 1
+  [[ -n $expected ]] || return 0
+  if [[ -f $cfg ]]; then
+    port=$(jq -r '.port // 0' "$cfg"); path=$(jq -r '.path' "$cfg")
+    [[ -z $(jq -r '.cert // empty' "$cfg") ]] || scheme=https
+  fi
+  body=$(mktemp)
+  while IFS=$'\t' read -r sid uid; do
+    if [[ $sid == '!SKIP' ]]; then SUB_TUIC_SKIPPED=$uid; continue; fi
+    if [[ $previous != "$sid" ]]; then
+      if [[ $port =~ ^[0-9]+$ ]] && ((port > 0)); then
+        code=$(curl -fsSk -m 10 -A "v2rayN/7.0" -H "Host: ${LINK_HOST:-$HOST}" \
+          -o "$body" -w '%{http_code}' "$scheme://127.0.0.1:$port$path$sid" 2>/dev/null || true)
+        [[ $code == 200 ]] || { ok=no; break; }
+      else
+        subscription_links "$sid" >"$body" || { ok=no; break; }
+      fi
+      previous=$sid
+    fi
+    tuic_link_present "$body" "$uid" || { ok=no; break; }
+    SUB_TUIC_CHECKED=$((SUB_TUIC_CHECKED + 1))
+  done <<<"$expected"
+  rm -f "$body"
+  ((SUB_TUIC_SKIPPED == 0)) || warn "TUIC: у $SUB_TUIC_SKIPPED клиентов индивидуальные Hosts; проверка наличия их ссылок пропущена."
+  [[ $ok == yes ]] || { warn "В подписке отсутствует ожидаемый TUIC. Проверьте kit-sub и его журнал."; return 1; }
+}
+
 check_subscription() {
   local cfg=/etc/kit-sub/config.json port path scheme=http sid ua code size body up sub_cert
   [[ -f $cfg ]] || { c_info "подписка не установлена (режим без сертификата: используйте отдельные ссылки из /root/3x-ui.txt)"; return 0; }
@@ -1038,10 +1145,20 @@ check_subscription() {
   if [[ $up == http://* && -n $sub_cert ]]; then
     c_bad subtls "у встроенной подписки 3X-UI включён TLS (сертификат $sub_cert), а kit-sub ходит к ней по http – подписка не отвечает"
   fi
-  body=$(mktemp)
   [[ -n $(jq -r '.cert // empty' "$cfg") ]] && scheme=https
   sid=$(clients 2>/dev/null | jq -r '[.[] | .subId // empty | select(. != "")][0] // empty' 2>/dev/null || true)
   [[ -n $sid ]] || { c_info "пользователей нет, подписку проверить нечем"; return 0; }
+  body=$(mktemp)
+  if [[ $port == 0 ]]; then
+    if subscription_links "$sid" >"$body" && sub_body_ok "$body" "v2rayN/7"; then
+      c_ok "прямые ссылки формируются (режим SSH, публичная служба подписки не нужна)"
+    else c_bad "" "не удалось получить прямые ссылки через kit-sub CLI"; fi
+    rm -f "$body"
+    if tuic_subscription_healthy; then
+      ((SUB_TUIC_CHECKED == 0)) || c_ok "TUIC присутствует в прямых ссылках ($SUB_TUIC_CHECKED)"
+    else c_bad "" "TUIC отсутствует в прямых ссылках"; fi
+    return 0
+  fi
   for ua in "Happ/1.0" "HiddifyNext/2.0" "v2rayN/7.0" "clash-verge/v2"; do
     : >"$body"
     code=$(curl -sgk -m 10 -A "$ua" -o "$body" -w '%{http_code}' "$scheme://127.0.0.1:$port$path$sid" 2>/dev/null || true)
@@ -1051,6 +1168,10 @@ check_subscription() {
     else c_bad svc:kit-sub "подписка для $ua: HTTP ${code:-нет ответа}"; fi
   done
   rm -f "$body"
+  if tuic_subscription_healthy; then
+    ((SUB_TUIC_CHECKED == 0)) || c_ok "TUIC присутствует в подписке ($SUB_TUIC_CHECKED)"
+  else c_bad "" "TUIC отсутствует в подписке: проверьте kit-sub 1.3.0 и журнал службы"
+  fi
   if [[ ${SINGLE:-no} == yes ]]; then
     body=$(mktemp)
     code=$(curl -sk -m 10 -A "Happ/1.0" -o "$body" -w '%{http_code}' "https://127.0.0.1$path$sid" 2>/dev/null || true)
@@ -1161,6 +1282,7 @@ PY
 deep_probe() {
   CHECK_BAD=0; CHECK_WARN=0; CHECK_QUIET=yes
   deep_clients >/dev/null 2>&1 || true
+  tuic_subscription_healthy || CHECK_BAD=$((CHECK_BAD + 1))
   CHECK_QUIET=no
   ((CHECK_BAD == 0))
 }
@@ -1257,7 +1379,7 @@ fix_action() { # код
       systemctl restart x-ui; sleep 4 ;;
     timer) say "Включаю автообновление"; auto_on ;;
     limit) say "Включаю проверку общего лимита трафика"; limit_timer_on ;;
-    core) say "Возвращаю проверенное ядро Xray ${XRAY_PIN#v}"; pin_core || true ;;
+    core) warn "Ядро меняется только явной командой kit core update." ;;
     perms)
       say "Возвращаю права 600 на файлы с паролями и ключами"
       local f
@@ -1362,18 +1484,130 @@ cmd_fix() {
 BACKUP_PATHS=(/etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /etc/kit-sub/rules.yaml
   /etc/nginx/kit-stream.conf /etc/nginx/conf.d/kit.conf /var/www/kit /root/cert/self /root/cert/custom /root/3x-ui.txt)
 
-# Вернуть проверенное ядро Xray (панель 3.9 иногда отвечает ошибкой GitHub API, хотя ядро заменено, поэтому смотрим на версию).
-pin_core() {
-  local cur="" i
-  (api POST "server/installXray/$XRAY_PIN" '{}' >/dev/null) 2>/dev/null || true
-  for i in $(seq 1 30); do
-    cur=$(xray_version || true)
-    [[ $cur == "$XRAY_PIN" ]] && return 0
-    sleep 2
+# Все обновления KIT/панели/ядра используют один замок.
+update_lock() {
+  exec 9>/run/kit-update.lock
+  flock -n 9 || die "Другое обновление уже идёт."
+}
+
+xray_fetch_verified() { # каталог, архитектура архива Xray (64 / arm64-v8a)
+  local d=$1 arch=$2 base got want=${XRAY_ZIP_SHA256[$2]}
+  for base in "${XRAY_MIRRORS[@]}"; do
+    curl -fsSL --connect-timeout 10 --max-time 180 --retry 1 -o "$d/xray.zip" \
+      "$base/XTLS/Xray-core/releases/download/$XRAY_PIN/Xray-linux-$arch.zip" 2>/dev/null || continue
+    got=$(sha256sum "$d/xray.zip" | awk '{print $1}')
+    [[ $got == "$want" ]] && return 0
+    warn "Архив Xray не совпал с закреплённым SHA256."
   done
-  warn "Не удалось вернуть ядро Xray $XRAY_PIN (сейчас ${cur:-?})."
   return 1
 }
+
+core_config_test() { # бинарник, конфиг; geodata берётся из рабочей установки
+  # Lua ищется и рядом с executable: проверочная копия должна лежать там же, где ядро.
+  (
+    check=$(mktemp /usr/local/x-ui/bin/.kit-xray-check.XXXXXX) || exit 1
+    trap 'rm -f -- "$check"' EXIT
+    install -m 755 "$1" "$check" || exit 1
+    cd /usr/local/x-ui || exit 1
+    XRAY_LOCATION_ASSET=/usr/local/x-ui/bin timeout 30 "$check" run -test -c "$2"
+  )
+}
+
+core_restore() { # сохранённый каталог, путь бинарника
+  local bak=$1 bin=$2
+  systemctl stop x-ui >/dev/null 2>&1 || return 1
+  install -m 755 "$bak/xray" "$bin.new" && mv -f "$bin.new" "$bin" || return 1
+  install -m 640 "$bak/config.json" /usr/local/x-ui/bin/config.json.new \
+    && mv -f /usr/local/x-ui/bin/config.json.new /usr/local/x-ui/bin/config.json || return 1
+  [[ $(sha256sum "$bin" | awk '{print $1}') == "$(cat "$bak/xray.sha256")" ]] || return 1
+  systemctl start x-ui && panel_healthy
+}
+
+core_update_abort() { # EXIT/SIGINT/SIGTERM после остановки службы
+  local bak=$1 bin=$2 tmp=$3
+  trap - EXIT
+  trap '' INT TERM
+  warn "Обновление ядра прервано – возвращаю прежний бинарник и конфиг."
+  if core_restore "$bak" "$bin"; then warn "Прежнее ядро восстановлено. Копия: $bak"
+  else warn "Автоматический откат не завершён. Копия: $bak; проверьте journalctl -u x-ui."
+  fi
+  rm -rf -- "$tmp"
+}
+
+core_update() {
+  local force=no a arch zip_arch cur tmp bin bak candidate_sha pre=no
+  for a in "$@"; do
+    case $a in --force) force=yes ;; *) die "kit core update [--force]" ;; esac
+  done
+  update_lock
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=amd64; zip_arch=64 ;;
+    aarch64 | arm64) arch=arm64; zip_arch=arm64-v8a ;;
+    *) die "Обновление ядра поддерживает только amd64 и arm64." ;;
+  esac
+  bin=/usr/local/x-ui/bin/xray-linux-$arch
+  [[ -x $bin && -s /usr/local/x-ui/bin/config.json ]] || die "Нет рабочего бинарника или config.json Xray."
+  cur=$(xray_version) || die "Не удалось узнать версию ядра."
+  if [[ $cur == "$XRAY_PIN" && $force == no ]]; then say "Ядро уже $XRAY_PIN."; return 0; fi
+  if newer "$cur" "$XRAY_PIN" && [[ $force == no ]]; then die "Ядро $cur новее $XRAY_PIN; явный возврат на pin: kit core update --force."; fi
+  command -v unzip >/dev/null || die "Для обновления нужен unzip: apt-get install unzip. Сервер не тронут."
+  say "Xray $cur → $XRAY_PIN. REALITY требует chrome и ML-KEM; проверьте версии клиентов."
+  tmp=$(mktemp -d) || die "Не удалось создать временный каталог. Сервер не тронут."
+  # shellcheck disable=SC2064
+  trap "rm -rf -- '$tmp'" EXIT
+  xray_fetch_verified "$tmp" "$zip_arch" || die "Не удалось скачать проверенный Xray. Сервер не тронут."
+  unzip -q "$tmp/xray.zip" xray -d "$tmp" || die "В проверенном архиве нет xray. Сервер не тронут."
+  chmod 755 "$tmp/xray" || die "Не удалось подготовить бинарник. Сервер не тронут."
+  [[ $("$tmp/xray" version | awk 'NR==1 {print "v" $2}') == "$XRAY_PIN" ]] \
+    || die "Версия скачанного ядра не совпала. Сервер не тронут."
+  core_config_test "$tmp/xray" /usr/local/x-ui/bin/config.json >"$tmp/config-test.log" 2>&1 \
+    || die "Новое ядро отклонило текущий конфиг. Сервер не тронут."
+  candidate_sha=$(sha256sum "$tmp/xray" | awk '{print $1}') || die "Не удалось прочитать бинарник. Сервер не тронут."
+  [[ $candidate_sha =~ ^[0-9a-f]{64}$ ]] || die "Нет SHA256 бинарника. Сервер не тронут."
+  deep_probe && pre=ok
+  bak=$(mktemp -d "/root/xray-before-update-$(date +%Y%m%d-%H%M%S).XXXXXX") \
+    || die "Не удалось создать каталог копии. Сервер не тронут."
+  if ! { chmod 700 "$bak" && install -m 755 "$bin" "$bak/xray" \
+      && sha256sum "$bin" | awk '{print $1}' >"$bak/xray.sha256" \
+      && [[ $(sha256sum "$bak/xray" | awk '{print $1}') == "$(cat "$bak/xray.sha256")" ]] \
+      && install -m 600 /usr/local/x-ui/bin/config.json "$bak/config.json" \
+      && printf '%s\n' "$cur" >"$bak/version"; }; then
+    die "Не удалось сохранить полную копию ядра и конфига. Сервер не тронут."
+  fi
+  # Ловим также сигнал или неожиданный выход после первой остановки службы.
+  # shellcheck disable=SC2064
+  trap "core_update_abort '$bak' '$bin' '$tmp'" EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if systemctl stop x-ui \
+      && install -m 600 /usr/local/x-ui/bin/config.json "$bak/config.frozen.json" \
+      && mv -f "$bak/config.frozen.json" "$bak/config.json" \
+      && core_config_test "$tmp/xray" "$bak/config.json" >"$bak/config-test.log" 2>&1 \
+      && install -m 755 "$tmp/xray" "$bin.new" && mv -f "$bin.new" "$bin" \
+      && systemctl start x-ui && panel_healthy \
+      && [[ $(xray_version) == "$XRAY_PIN" ]] \
+      && [[ $(sha256sum "$bin" | awk '{print $1}') == "$candidate_sha" ]] \
+      && tuic_subscription_healthy \
+      && { [[ $pre != ok ]] || deep_probe; }; then
+    trap - EXIT INT TERM
+    rm -rf -- "$tmp"
+    say "Ядро обновлено до $XRAY_PIN. Копия прежнего бинарника и конфига: $bak"
+    return 0
+  fi
+  trap - EXIT
+  trap '' INT TERM
+  if core_restore "$bak" "$bin"; then
+    trap - INT TERM
+    rm -rf -- "$tmp"
+    die "Проверка нового ядра не прошла; прежнее ядро и конфиг восстановлены. Копия: $bak"
+  fi
+  trap - INT TERM
+  rm -rf -- "$tmp"
+  die "Новое ядро не прошло проверку; автоматический откат не завершён. Копия: $bak; journalctl -u x-ui -n 50"
+}
+
+# Старое служебное имя оставлено без отдельного небезопасного пути через API панели.
+pin_core() { core_update "$@"; }
 
 panel_healthy() { # ждём ответа панели и запущенного ядра до 60 секунд
   local i
@@ -1389,13 +1623,14 @@ panel_healthy() { # ждём ответа панели и запущенного
 # проверенный архив, замена файлов панели, миграция базы. Не трогает ядро Xray, сертификаты и настройки
 # (официальный update.sh при отсутствии сертификата сам выпускает его и включает TLS, меняет ядро и ставит fail2ban).
 panel_update() {
-  local force=no a arch cur target=${XUI_PIN#v} tmp ts bak got want os_id keep_core core_sha
+  local force=no a arch cur target=${XUI_PIN#v} tmp bak got want os_id keep_core core_sha
   for a in "$@"; do
     case $a in
       --force) force=yes ;;
       *) die "kit panel update [--force]" ;;
     esac
   done
+  update_lock
   case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; *) die "Обновление панели умеет только amd64 и arm64." ;; esac
   cur=$(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1 || true)
   [[ -n $cur ]] || die "Не удалось узнать версию панели."
@@ -1423,19 +1658,23 @@ panel_update() {
     || die "Не удалось скачать x-ui.sh. Сервер не тронут."
   [[ $(sha256sum "$tmp/x-ui.sh" | awk '{print $1}') == "$XUI_SH_SHA256" ]] || die "Скрипт меню x-ui не совпал с проверенным (SHA256) – не ставлю. Сервер не тронут."
   tar tzf "$tmp/x-ui.tar.gz" | grep -qE '^/|(^|/)\.\.(/|$)' && die "В архиве панели странные пути – не ставлю."
-  tar xzf "$tmp/x-ui.tar.gz" -C "$tmp"
+  tar xzf "$tmp/x-ui.tar.gz" -C "$tmp" || die "Не удалось распаковать панель. Сервер не тронут."
   [[ -s $tmp/x-ui/x-ui ]] || die "В архиве панели нет x-ui. Сервер не тронут."
 
   # Подключения клиентом до обновления: если они работали, после обновления должны работать так же, иначе вернём прежнюю панель.
   local pre=no
   deep_probe && pre=ok
   # 2. Копия на случай отката (база снимается средствами SQLite).
-  ts=$(date +%Y%m%d-%H%M); bak=/root/x-ui-before-update-$ts
-  install -d -m 700 "$bak/etc-x-ui"
-  cp -a /usr/local/x-ui "$bak/usr-local-x-ui"
-  cp -a /etc/x-ui/. "$bak/etc-x-ui/"
-  cp -a /etc/systemd/system/x-ui.service "$bak/x-ui.service" 2>/dev/null || true
-  cp -a /usr/bin/x-ui "$bak/x-ui.sh" 2>/dev/null || true
+  bak=$(mktemp -d "/root/x-ui-before-update-$(date +%Y%m%d-%H%M%S).XXXXXX") \
+    || die "Не удалось создать копию панели. Сервер не тронут."
+  install -d -m 700 "$bak/etc-x-ui" && cp -a /usr/local/x-ui "$bak/usr-local-x-ui" \
+    && cp -a /etc/x-ui/. "$bak/etc-x-ui/" || die "Копия панели не завершена. Сервер не тронут."
+  if [[ -f /etc/systemd/system/x-ui.service ]]; then
+    cp -a /etc/systemd/system/x-ui.service "$bak/x-ui.service" || die "Не удалось скопировать unit. Сервер не тронут."
+  fi
+  if [[ -f /usr/bin/x-ui ]]; then
+    cp -a /usr/bin/x-ui "$bak/x-ui.sh" || die "Не удалось скопировать меню. Сервер не тронут."
+  fi
   python3 - /etc/x-ui/x-ui.db "$bak/x-ui.db" <<'PY' || die "Не удалось сохранить копию базы. Сервер не тронут."
 import sqlite3, sys
 src = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
@@ -1445,33 +1684,41 @@ PY
 
   # 3. Замена файлов. Ядро Xray (проверенное) оставляем: берём его из прежней установки.
   keep_core=$tmp/xray.keep
-  cp -a "/usr/local/x-ui/bin/xray-linux-$arch" "$keep_core"
-  core_sha=$(sha256sum "$keep_core" | awk '{print $1}')
-  systemctl stop x-ui
-  pkill -f 'mtg-linux-[^ ]* run ' >/dev/null 2>&1 || true
-  install -m 755 "$tmp/x-ui/x-ui" /usr/local/x-ui/x-ui.new && mv -f /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui
-  for f in "$tmp"/x-ui/bin/*; do
-    case ${f##*/} in xray-linux-*) continue ;; esac
-    cp -af "$f" /usr/local/x-ui/bin/
-  done
-  install -m 755 "$keep_core" "/usr/local/x-ui/bin/xray-linux-$arch"
-  chmod +x "/usr/local/x-ui/bin/mtg-linux-$arch" 2>/dev/null || true
-  rm -rf /usr/local/x-ui/bin/tuic-server /usr/local/x-ui/bin/tuic   # TUIC теперь встроен в панель
-  install -m 755 "$tmp/x-ui.sh" /usr/local/x-ui/x-ui.sh
-  install -m 755 "$tmp/x-ui.sh" /usr/bin/x-ui.new && mv -f /usr/bin/x-ui.new /usr/bin/x-ui
-  os_id=$(. /etc/os-release && echo "${ID:-}")
-  case $os_id in
-    ubuntu | debian) [[ -f $tmp/x-ui/x-ui.service.debian ]] && install -m 644 "$tmp/x-ui/x-ui.service.debian" /etc/systemd/system/x-ui.service ;;
-    *) warn "Файл службы не менял (система $os_id): оставил прежний." ;;
-  esac
-  chown -R root:root /usr/local/x-ui
-  [[ -f /usr/local/x-ui/bin/config.json ]] && chmod 640 /usr/local/x-ui/bin/config.json
-  systemctl daemon-reload
-  /usr/local/x-ui/x-ui migrate >/dev/null 2>&1 || true
-  systemctl enable x-ui >/dev/null 2>&1 || true
+  cp -a "/usr/local/x-ui/bin/xray-linux-$arch" "$keep_core" || die "Не удалось сохранить ядро. Сервер не тронут."
+  core_sha=$(sha256sum "$keep_core" | awk '{print $1}') || die "Не удалось прочитать ядро. Сервер не тронут."
+  systemctl stop x-ui || die "Не удалось остановить панель. Рабочие файлы не заменены; копия: $bak"
+  local migrated=no
+  if (
+    pkill -f 'mtg-linux-[^ ]* run ' >/dev/null 2>&1 || true
+    install -m 755 "$tmp/x-ui/x-ui" /usr/local/x-ui/x-ui.new \
+      && mv -f /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui || exit 1
+    for f in "$tmp"/x-ui/bin/*; do
+      case ${f##*/} in xray-linux-*) continue ;; esac
+      cp -af "$f" /usr/local/x-ui/bin/ || exit 1
+    done
+    install -m 755 "$keep_core" "/usr/local/x-ui/bin/xray-linux-$arch" || exit 1
+    chmod +x "/usr/local/x-ui/bin/mtg-linux-$arch" 2>/dev/null || true
+    rm -rf /usr/local/x-ui/bin/tuic-server /usr/local/x-ui/bin/tuic || exit 1
+    install -m 755 "$tmp/x-ui.sh" /usr/local/x-ui/x-ui.sh || exit 1
+    install -m 755 "$tmp/x-ui.sh" /usr/bin/x-ui.new && mv -f /usr/bin/x-ui.new /usr/bin/x-ui || exit 1
+    os_id=$(. /etc/os-release && echo "${ID:-}") || exit 1
+    case $os_id in
+      ubuntu | debian)
+        install -m 644 "$tmp/x-ui/x-ui.service.debian" /etc/systemd/system/x-ui.service || exit 1 ;;
+      *) warn "Файл службы не менял (система $os_id): оставил прежний." ;;
+    esac
+    chown -R root:root /usr/local/x-ui || exit 1
+    if [[ -f /usr/local/x-ui/bin/config.json ]]; then chmod 640 /usr/local/x-ui/bin/config.json || exit 1; fi
+    systemctl daemon-reload || exit 1
+    /usr/local/x-ui/x-ui migrate >"$bak/migrate.log" 2>&1 || exit 1
+    systemctl enable x-ui >/dev/null 2>&1 || true
+  ); then migrated=yes
+  else warn "Замена файлов или миграция не завершилась – возвращаю прежнюю панель. Лог миграции: $bak/migrate.log"
+  fi
 
   # 4. Проверка и откат при провале (включая отказ запуска службы).
-  if systemctl start x-ui && panel_healthy && [[ $(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1) == "$target" ]] \
+  if [[ $migrated == yes ]] && systemctl start x-ui && panel_healthy && tuic_subscription_healthy \
+      && [[ $(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1) == "$target" ]] \
       && [[ $(sha256sum "/usr/local/x-ui/bin/xray-linux-$arch" | awk '{print $1}') == "$core_sha" ]] \
       && { [[ $pre != ok ]] || { sleep 5; deep_probe; }; }; then
     systemctl is-active -q x-ui || true
@@ -1482,17 +1729,19 @@ PY
     return 0
   fi
   warn "Проверка панели, ядра или подключений после обновления не прошла – возвращаю прежнюю установку."
-  systemctl stop x-ui || true
-  rm -rf /usr/local/x-ui && cp -a "$bak/usr-local-x-ui" /usr/local/x-ui
-  cp -a "$bak/etc-x-ui/." /etc/x-ui/
-  # Копия каталога могла попасть между записями SQLite. Возвращаем согласованный snapshot
-  # и убираем WAL/SHM новой базы, чтобы они не переиграли миграции поверх старой.
-  rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm
-  install -m 600 "$bak/x-ui.db" /etc/x-ui/x-ui.db
-  [[ -f $bak/x-ui.service ]] && cp -a "$bak/x-ui.service" /etc/systemd/system/x-ui.service
-  [[ -f $bak/x-ui.sh ]] && install -m 755 "$bak/x-ui.sh" /usr/bin/x-ui
-  systemctl daemon-reload; systemctl start x-ui || true
-  die "Обновление не удалось, прежняя панель восстановлена ($cur). Копия: $bak. Лог: journalctl -u x-ui -n 50"
+  if systemctl stop x-ui \
+      && rm -rf /usr/local/x-ui && cp -a "$bak/usr-local-x-ui" /usr/local/x-ui \
+      && cp -a "$bak/etc-x-ui/." /etc/x-ui/ \
+      && rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm \
+      && install -m 600 "$bak/x-ui.db" /etc/x-ui/x-ui.db \
+      && { [[ ! -f $bak/x-ui.service ]] || cp -a "$bak/x-ui.service" /etc/systemd/system/x-ui.service; } \
+      && { [[ ! -f $bak/x-ui.sh ]] || install -m 755 "$bak/x-ui.sh" /usr/bin/x-ui; } \
+      && systemctl daemon-reload && systemctl start x-ui && panel_healthy \
+      && [[ $(/usr/local/x-ui/x-ui -v 2>/dev/null | head -1) == "$cur" ]] \
+      && [[ $(sha256sum "/usr/local/x-ui/bin/xray-linux-$arch" | awk '{print $1}') == "$core_sha" ]]; then
+    die "Обновление не удалось, прежняя панель восстановлена ($cur). Копия: $bak. Лог: journalctl -u x-ui -n 50"
+  fi
+  die "Обновление не удалось; автоматический откат не завершён или старая панель не прошла проверку. Копия: $bak; journalctl -u x-ui -n 50"
 }
 
 cmd_backup() {
@@ -2928,12 +3177,14 @@ net_fp() { # отпечаток
   old=$(api GET inbounds/list | jq -r '[.[] | (.streamSettings | if type == "string" then fromjson else . end) | (.realitySettings.settings.fingerprint // .tlsSettings.settings.fingerprint // empty)][0] // "?"')
   while read -r id; do
     inbound_patch "$id" '.streamSettings |= ((if type == "string" then fromjson else . end)
-      | (if .realitySettings.settings then .realitySettings.settings.fingerprint = $f else . end)
+      | (.security == "reality") as $is_reality
+      | (if .realitySettings.settings then .realitySettings.settings.fingerprint = "chrome" else . end)
       | (if .tlsSettings.settings then .tlsSettings.settings.fingerprint = $f else . end)
-      | (if .externalProxy then .externalProxy |= map(if has("fingerprint") then .fingerprint = $f else . end) else . end))' --arg f "$f" \
+      | (if .externalProxy then .externalProxy |= map(if has("fingerprint") then .fingerprint = (if $is_reality then "chrome" else $f end) else . end) else . end))' --arg f "$f" \
       && n=$((n + 1))
   done < <(api GET inbounds/list | jq -r '.[] | select((.streamSettings | if type == "string" then fromjson else . end) | (.security == "reality" or .security == "tls")) | .id')
   say "Отпечаток $old → ${B}$f${N}, обновлено подключений: $n."
+  say "У REALITY сохранён chrome: сервер требует ML-KEM. Для других TLS-подключений выбран $f."
   echo "Подписка обновится сама; вручную сохранённые ссылки замените (kit → Пользователи → Показать ссылки)."
   [[ ${KIT_IN_MENU:-} == 1 ]] || echo "Вернуть прежний: kit → Протоколы, порты и маскировка → Сменить отпечаток клиента."
 }
@@ -3189,12 +3440,12 @@ menu_main() {
     echo
     box "3X-UI KIT $KIT_VERSION – управление сервером" "1. Пользователи" "2. Протоколы, порты и маскировка" "3. Проверка сервера" "" \
       "4. Обновить kit и подписку" "5. Обновить панель 3X-UI" "6. Автообновление: включить или выключить" "" \
-      "7. Резервная копия" "8. Версии" "" "9. Панель 3X-UI (меню x-ui)" "10. Удалить KIT с сервера" "0. Выход"
+      "7. Резервная копия" "8. Версии" "" "9. Панель 3X-UI (меню x-ui)" "10. Удалить KIT с сервера" "11. Обновить ядро Xray (проверить клиентов)" "0. Выход"
     echo
     menu_status
     update_hint
     echo
-    ask_num "Выбор [0-10]: "; c=$REPLY
+    ask_num "Выбор [0-11]: "; c=$REPLY
     case $c in
       1) menu_users ;;
       2) menu_net ;;
@@ -3206,6 +3457,7 @@ menu_main() {
       8) run_action cmd_version; pause ;;
       9) command -v x-ui >/dev/null && x-ui || echo "Меню x-ui не найдено." ;;
       10) run_action cmd_uninstall; pause ;;
+      11) run_action core_update; pause ;;
       0 | "") return 0 ;;
       *) echo "Нет такого пункта." ;;
     esac
@@ -3351,7 +3603,8 @@ ${B}3X-UI KIT $KIT_VERSION${N} – команды (то же самое есть
   kit links [имя]            все ссылки на подключения (подписка, протоколы, Telegram)
   kit net …                  протоколы, порты, сайт маскировки, отпечаток
   kit check [--deep|--fix]   проверка сервера
-  kit update [--panel]       обновление (--auto и --manual – автообновление)
+  kit update [--panel]       KIT и подписка; --panel обновляет только панель
+  kit core update [--force]  закреплённое ядро Xray, с копией и откатом
   kit backup                 копия сервера
   kit uninstall              полное удаление (спросит подтверждение; --dry-run – только показать)
   kit version                версии
@@ -3380,6 +3633,7 @@ case "$cmd_key" in
   "port "*) [[ -z ${2:-} ]] || die "Команда: kit net port имя порт"; net_show ;;
   "reality add") shift 2; reality_add "$@" ;;
   "panel update") shift 2; panel_update "$@" ;;
+  "core update") shift 2; core_update "$@" ;;
   "__limit-timer on") limit_timer_on ;;
   "__xver "*) # служебная: xver у всех REALITY со своим доменом (возврат после неудачного --restore)
     [[ ${2:-} =~ ^[01]$ ]] || exit 1

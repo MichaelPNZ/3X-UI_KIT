@@ -1,4 +1,11 @@
 <!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>Конфиг для роутера</title>
-<meta http-equiv="refresh" content="0; url=../?core=xray"></head>
+<script>
+const target = new URL('../', location.href);
+target.search = location.search;
+target.searchParams.set('core', 'xray');
+target.hash = location.hash;
+location.replace(target.href);
+</script>
+<noscript><meta http-equiv="refresh" content="0; url=../?core=xray"></noscript></head>
 <body><a href="../?core=xray">Конфиг для роутера</a></body></html>

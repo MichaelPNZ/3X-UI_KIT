@@ -10,14 +10,19 @@
 </head>
 <body>
 <header><div class="bar">
-  <a class="brand" href="https://github.com/itsnotkubrick/3X-UI_KIT">3X-UI<span>.kit</span></a>
-  <nav><a href="https://github.com/itsnotkubrick/3X-UI_KIT/blob/main/manuals/xkeen-keenetic.md">Инструкции</a></nav>
+  <a class="brand" href="https://github.com/MichaelPNZ/3X-UI_KIT">3X-UI<span>.kit</span></a>
+  <nav><a href="https://github.com/MichaelPNZ/3X-UI_KIT/blob/main/manuals/xkeen-keenetic.md">Инструкции</a></nav>
 </div></header>
 
 <main>
   <h1>Конфиг для роутера</h1>
   <p class="lead" id="lead"></p>
   <div class="privacy">🔒 <span>Всё считается <b>в вашем браузере</b>: ссылки никуда не отправляются</span></div>
+  <p class="hint">Для REALITY на сервере KIT 1.3.0 нужен клиент с X25519MLKEM768. Генератор ставит <code>chrome</code>
+    и включает ML-KEM в Mihomo. Подтверждены по коду Xray 26.9.9 и Mihomo 1.19.32/1.19.33;
+    поддержка более старых версий здесь не подтверждена.
+    <a href="https://github.com/MichaelPNZ/3X-UI_KIT/blob/main/manuals/panel-v3.11.0.md">Совместимость клиентов</a>.
+    Для подписки используйте KIT 1.3.0: параметры из сторонней подписки определяет её поставщик.</p>
 
   <section class="step">
     <h2><span class="num">1</span>Роутер</h2>
@@ -78,9 +83,9 @@
     <div id="cmdBox"><div class="empty">Команда появится, когда будет готов конфиг.</div></div>
   </section>
 
-  <p class="hint">Как установить XKeen или Nikki: <a href="https://github.com/itsnotkubrick/3X-UI_KIT/blob/main/manuals/xkeen-keenetic.md">инструкции на GitHub</a></p>
+  <p class="hint">Как установить XKeen или Nikki: <a href="https://github.com/MichaelPNZ/3X-UI_KIT/blob/main/manuals/xkeen-keenetic.md">инструкции на GitHub</a></p>
 </main>
-<footer><a href="https://github.com/itsnotkubrick/3X-UI_KIT/tree/main/tools">Исходный код на GitHub</a> · <span id="tested"></span></footer>
+<footer><a href="https://github.com/MichaelPNZ/3X-UI_KIT/tree/main/tools">Исходный код на GitHub</a> · <span id="tested"></span></footer>
 
 <script src="lib/links.js"></script>
 <script src="lib/xray.js"></script>
@@ -168,7 +173,7 @@
     $('#serversHint').innerHTML = x
       ? 'Поддерживаются vless (REALITY, TLS, ws, gRPC, xhttp, httpupgrade), vmess, trojan, shadowsocks, Hysteria2 и WireGuard. Несколько серверов: Xray сам выберет самый быстрый. TUIC и AmneziaWG работают через Mihomo.'
       : 'Подписку роутер скачает сам и будет обновлять каждый час. Поддерживаются vless (REALITY, TLS, ws, gRPC, xhttp), vmess, trojan, shadowsocks, Hysteria2, TUIC, WireGuard и AmneziaWG (ссылки wireguard:// и vpn:// из 3X-UI).';
-    $('#tested').textContent = x ? 'Проверено на Xray 26 и XKeen 2.0' : 'Проверено на Mihomo 1.19 и XKeen 2.0 (Keenetic)';
+    $('#tested').textContent = x ? 'XKeen 2.0 · REALITY: Xray 26.9.9 / chrome' : 'XKeen 2.0 / Nikki · REALITY: Mihomo 1.19.32/1.19.33 / chrome';
     ['blockQuic', 'blockAds', 'finalProxy'].forEach((k) => { if (k in saved[core]) $('#' + k).checked = saved[core][k]; });
     $('#blockAds').disabled = false; $('#adsOpt').classList.remove('off'); $('#adsHint').textContent = '';
   }

@@ -10,30 +10,58 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Зависимости проверок
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-yaml shellcheck
       - name: ShellCheck
         run: shellcheck -S warning -e SC1090,SC2034,SC2211 scripts/*.sh tools/release.sh
-      - name: Сохранение ядра при установке и обновлении панели
-        run: python3 tools/test/panel_update_test.py
-      - name: Python
-        run: python3 -m py_compile scripts/kit-sub.py
+      - name: Синтаксис Python без записи pycache
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          for p in (Path("scripts/kit-sub.py"), *sorted(Path("tools/test").glob("*_test.py"))):
+              ast.parse(p.read_text(), filename=str(p))
+          PY
+      - name: Все Python-тесты отдельными процессами (GNU bash и grep)
+        run: |
+          for test_file in tools/test/*_test.py; do
+            echo "::group::$test_file"
+            PATH="/usr/bin:$PATH" /usr/bin/python3 "$test_file"
+            echo "::endgroup::"
+          done
       - name: Генераторы
         run: node --test tools/test/*.test.js
-      - name: Проверка копии для --restore (GNU grep и bash)
-        run: |
-          python3 tools/test/restore_env_test.py
-          python3 tools/test/restore_archive_test.py
       - name: Версия в скриптах совпадает с VERSION
         run: |
           v=$(cat VERSION)
-          grep -q "^KIT_VERSION=\"$v\"" scripts/3x-ui.sh
-          grep -q "^KIT_VERSION=\"$v\"" scripts/hysteria2.sh
-          grep -q "^KIT_VERSION=\"$v\"" scripts/kit.sh
+          grep -Fxq "KIT_VERSION=\"$v\"" scripts/3x-ui.sh
+          grep -Fxq "KIT_VERSION=\"$v\"" scripts/hysteria2.sh
+          grep -Fxq "KIT_VERSION=\"$v\"" scripts/kit.sh
       - name: Подпись релиза совпадает с файлами
         run: |
-          [ -f SHA256SUMS ] || { echo "SHA256SUMS нет – релиз ещё не подписан"; exit 0; }
-          grep -qx "# 3X-UI KIT $(cat VERSION)" SHA256SUMS
+          signer_lines=$(awk '/^KIT_SIGNERS=\(/ {on = 1; next} on && /^\)/ {exit} on && /^ *"/ {sub(/^ *"/, ""); sub(/" *$/, ""); print}' scripts/kit.sh)
+          if [ ! -f SHA256SUMS ]; then
+            [ ! -f SHA256SUMS.sig ] || { echo "Есть подпись без manifest"; exit 1; }
+            echo "SHA256SUMS нет: это подготовка, релиз ещё не подписан"
+            if [[ -z $signer_lines || $signer_lines == *REPLACE_WITH_* || $signer_lines == *PLACEHOLDER* ]]; then
+              echo "Ключ форка ещё не задан; владелец должен заменить placeholder перед подписью"
+            fi
+            exit 0
+          fi
+          [[ -n $signer_lines && $signer_lines != *REPLACE_WITH_* && $signer_lines != *PLACEHOLDER* ]] \
+            || { echo "Manifest нельзя выпускать с placeholder/пустым KIT_SIGNERS"; exit 1; }
+          [ -f SHA256SUMS.sig ] || { echo "Нет SHA256SUMS.sig"; exit 1; }
+          grep -Fxq "# 3X-UI KIT $(cat VERSION)" SHA256SUMS
           grep -v '^#' SHA256SUMS | sha256sum -c -
-          awk '/^KIT_SIGNERS=\(/ {on = 1; next} on && /^\)/ {exit} on && /^ *"/ {gsub(/^ *"|"$/, ""); print "releases@3x-ui-kit namespaces=\"3x-ui-kit-release\" " $0}' scripts/kit.sh >allowed_signers
-          ssh-keygen -Y verify -f allowed_signers -I releases@3x-ui-kit -n 3x-ui-kit-release -s SHA256SUMS.sig <SHA256SUMS
+          allowed_signers=$(mktemp)
+          trap 'rm -f "$allowed_signers"' EXIT
+          while IFS= read -r signer; do
+            printf '%s namespaces="%s" %s\n' releases@3x-ui-kit 3x-ui-kit-release "$signer"
+          done <<<"$signer_lines" >"$allowed_signers"
+          ssh-keygen -Y verify -f "$allowed_signers" -I releases@3x-ui-kit -n 3x-ui-kit-release -s SHA256SUMS.sig <SHA256SUMS

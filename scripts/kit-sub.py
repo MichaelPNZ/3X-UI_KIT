@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Подписка с учётом приложения – посредник перед подпиской 3X-UI.
 
-https://github.com/itsnotkubrick/3X-UI_KIT
+https://github.com/MichaelPNZ/3X-UI_KIT
 
 Слушает публичный адрес подписки (HTTPS) и ходит в подписку 3X-UI на 127.0.0.1:
   * Clash / Mihomo (Clash Verge, FlClash, Mihomo Party…) – конфиг 3X-UI плюс AmneziaWG
     из подписки «<id>-awg»: Mihomo умеет AmneziaWG, а остальные приложения нет;
-  * остальные приложения и браузер – ответ 3X-UI как есть (ссылки или страница);
+  * raw/JSON/YAML REALITY – Chrome с ML-KEM; raw TUIC восстанавливается из страницы того же клиента;
+  * браузер – страница 3X-UI без изменений;
   * заголовок Subscription-Userinfo: expire=0 («бессрочно») убирается – иначе
     приложения показывают срок «01.01.1970».
 
@@ -14,6 +15,7 @@ https://github.com/itsnotkubrick/3X-UI_KIT
 """
 
 import base64
+import html.parser
 import http.client
 import http.server
 import ipaddress
@@ -26,7 +28,9 @@ import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 
 import yaml
 
@@ -83,7 +87,7 @@ LINK_SNI = re.compile(r"([?&]sni=)([^&#\s]*)")
 
 
 def log(msg):
-    print(msg, flush=True)
+    print(msg, file=sys.stderr, flush=True)
 
 
 def upstream(sub_id, ua, host, accept, prefix=None):
@@ -95,8 +99,8 @@ def upstream(sub_id, ua, host, accept, prefix=None):
             return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
-    except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout) as e:
-        log(f"upstream недоступен: {e}")
+    except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout):
+        log("локальная подписка панели недоступна")
         return None, {}, b""
 
 
@@ -130,11 +134,32 @@ def grace_link(line, grace):
     return LINK_SNI.sub(lambda m: m.group(1) + grace.get(m.group(2), m.group(2)), line)
 
 
+def reality_link(line):
+    """REALITY на новом Xray: Chrome с ML-KEM; остальные URI и их TLS-настройки прежние."""
+    if len(line) > 8192:
+        return line
+    try:
+        parsed = urllib.parse.urlsplit(line)
+        if parsed.scheme.lower() != "vless":
+            return line
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=100)
+        if not any(k == "security" and v.lower() == "reality" for k, v in query):
+            return line
+        wanted = {"fp": "chrome", "support-x25519mlkem768": "true"}
+        if all([v for k, v in query if k == name] == [value] for name, value in wanted.items()):
+            return line
+        query = [(k, v) for k, v in query if k not in wanted] + list(wanted.items())
+        return urllib.parse.urlunsplit(parsed._replace(query=urllib.parse.urlencode(query)))
+    except (ValueError, UnicodeError):
+        return line
+
+
 def fix_vless_encryption(body, grace=None):
     """JSON-подписка панели: у vless-пользователя без encryption (нет поля или пусто) ставим "none" – Xray иначе
     не принимает конфиг. Две формы: vnext[].users[] и плоская (settings.id/encryption). Непустое значение
     (например, mlkem) не трогаем. Прежнее (льготное) имя сайта REALITY – на нынешнее (grace).
-    Не разобралось, слишком большое или менять нечего – тело как пришло."""
+    REALITY использует fingerprint Chrome с ML-KEM. Не разобралось, слишком большое
+    или менять нечего – тело как пришло."""
     if len(body) > JSON_FIX_MAX:
         return body
     try:
@@ -155,6 +180,9 @@ def fix_vless_encryption(body, grace=None):
         for o in outs if isinstance(outs, list) else []:
             ss = o.get("streamSettings") if isinstance(o, dict) else None
             rs = ss.get("realitySettings") if isinstance(ss, dict) else None
+            if isinstance(ss, dict) and ss.get("security") == "reality" and isinstance(rs, dict) and rs.get("fingerprint") != "chrome":
+                rs["fingerprint"] = "chrome"
+                changed = True
             if grace and isinstance(rs, dict) and rs.get("serverName") in grace:
                 rs["serverName"] = grace[rs["serverName"]]
                 changed = True
@@ -171,7 +199,8 @@ def fix_vless_encryption(body, grace=None):
 
 def strip_links(body, grace=None):
     """Список ссылок (base64 или текст) без vpn:// и tg:// – их не умеет ни одно VPN-приложение
-    со ссылками: vpn:// – конфиг для AmneziaVPN, tg:// – прокси для Telegram. Прежнее имя сайта REALITY – на нынешнее."""
+    со ссылками: vpn:// – конфиг для AmneziaVPN, tg:// – прокси для Telegram. Прежнее имя
+    сайта REALITY – на нынешнее, fingerprint – Chrome с ML-KEM."""
     text = body.decode("utf-8", "replace").strip()
     encoded = "://" not in text
     if encoded:
@@ -179,9 +208,207 @@ def strip_links(body, grace=None):
             text = base64.b64decode(text + "=" * (-len(text) % 4)).decode("utf-8", "replace")
         except ValueError:
             return body
-    lines = [grace_link(l, grace) for l in text.splitlines() if l.strip() and not l.startswith(("vpn://", "tg://"))]
+    lines = [reality_link(grace_link(l, grace)) for l in text.splitlines() if l.strip() and not l.startswith(("vpn://", "tg://"))]
     out = "\n".join(lines)
     return base64.b64encode(out.encode()).decode().encode() if encoded else out.encode()
+
+
+def fix_clash_reality(body):
+    """Только REALITY proxies: Chrome и явная ML-KEM share для Mihomo; pin и прочие поля сохраняются."""
+    cfg = yaml.safe_load(body)
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("proxies"), list):
+        return body
+    changed = False
+    for proxy in cfg["proxies"]:
+        if not isinstance(proxy, dict) or not isinstance(proxy.get("reality-opts"), dict):
+            continue
+        opts = proxy["reality-opts"]
+        if proxy.get("client-fingerprint") != "chrome" or opts.get("support-x25519mlkem768") is not True:
+            proxy["client-fingerprint"] = "chrome"
+            opts["support-x25519mlkem768"] = True
+            changed = True
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).encode() if changed else body
+
+
+class _SubPageParser(html.parser.HTMLParser):
+    """Читаем JSON payload стандартной SPA, никогда не исполняем JavaScript/custom HTML."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.in_script = False
+        self.parts = []
+        self.pages = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "script":
+            self.in_script = True
+            self.parts = []
+
+    def handle_data(self, data):
+        if self.in_script:
+            self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() != "script" or not self.in_script:
+            return
+        self.in_script = False
+        script = "".join(self.parts)
+        match = re.search(r"(?:^|;)\s*window\.__SUB_PAGE_DATA__\s*=\s*", script)
+        if match:
+            value, end = json.JSONDecoder().raw_decode(script[match.end():])
+            if script[match.end() + end:].strip() != ";":
+                raise ValueError("unexpected subpage payload")
+            self.pages.append(value)
+
+
+def tuic_identity(link):
+    """Credential + endpoint identity; a changed display remark must not duplicate an upstream link."""
+    if not isinstance(link, str) or len(link) > 8192 or any(ord(c) < 32 or ord(c) == 127 for c in link):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(link)
+        if parsed.scheme.lower() != "tuic" or not parsed.hostname or not parsed.port or not parsed.username or not parsed.password:
+            return None
+        identity = str(uuid.UUID(urllib.parse.unquote(parsed.username)))
+        password = urllib.parse.unquote(parsed.password)
+        if any(ord(c) < 32 or ord(c) == 127 for c in password) or not 1 <= parsed.port <= 65535:
+            return None
+        return identity, password, parsed.hostname.lower(), parsed.port
+    except (ValueError, UnicodeError):
+        return None
+
+
+def tuic_links_from_page(body, sub_id, now=None):
+    """Same-subscriber HTML links from upstream's normal raw-format host/exclude filters.
+
+    PageData exposes aggregate enabled/quota/expiry only, not per-link status. This
+    restores the panel's own export; it never enables a client or changes server
+    access. A successful original raw request is required before fetching HTML.
+    """
+    if len(body) > JSON_FIX_MAX:
+        raise ValueError("subpage too large")
+    parser = _SubPageParser()
+    parser.feed(body.decode("utf-8"))
+    parser.close()
+    if len(parser.pages) != 1 or not isinstance(parser.pages[0], dict):
+        raise ValueError("missing or ambiguous subpage payload")
+    page = parser.pages[0]
+    if page.get("sId") != sub_id or not isinstance(page.get("links"), list) or len(page["links"]) > 4096:
+        raise ValueError("invalid subpage identity or links")
+    if page.get("enabled") is not True:
+        return []
+    keys = ("expire", "downloadByte", "uploadByte", "totalByte")
+    if any(type(page.get(k)) is not int or page[k] < 0 for k in keys):
+        raise ValueError("invalid subscription limits")
+    if page["expire"] and page["expire"] <= (time.time() if now is None else now):
+        return []
+    if page["totalByte"] and page["downloadByte"] + page["uploadByte"] >= page["totalByte"]:
+        return []
+    if any(not isinstance(link, str) for link in page["links"]):
+        raise ValueError("invalid subpage link")
+    return [link for link in page["links"] if tuic_identity(link) is not None]
+
+
+class _NoSubRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def local_subscription_body(sub_id, ua, host, accept, prefix=None):
+    """Bounded, no-redirect subscription fetch, only from a literal loopback origin."""
+    if not SUB_ID.fullmatch(sub_id) or prefix not in (None, PATH) or not host or len(host) > 300:
+        raise ValueError("invalid subscription request")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if not re.fullmatch(r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9_.-]+)(?::[0-9]{1,5})?", host):
+            raise ValueError("invalid subscription host")
+    parsed = urllib.parse.urlsplit(CONF["upstream"])
+    if parsed.scheme not in ("http", "https") or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("invalid local upstream")
+    if not ipaddress.ip_address(parsed.hostname or "").is_loopback:
+        raise ValueError("non-local upstream")
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError("invalid local port")
+    req = urllib.request.Request(CONF["upstream"].rstrip("/") + PATH + sub_id,
+                                 headers={"User-Agent": ua, "Host": host, "Accept": accept})
+    # Never expose the bearer subscription URL through redirects or environment proxies.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoSubRedirect())
+    with opener.open(req, timeout=5) as response:
+        if response.status != 200 or accept not in response.headers.get("Content-Type", "").lower():
+            raise ValueError("unexpected subpage response")
+        body = response.read(JSON_FIX_MAX + 1)
+        if len(body) > JSON_FIX_MAX:
+            raise ValueError("subscription too large")
+        return body
+
+
+def fetch_tuic_page(sub_id, ua, host, prefix=None):
+    return local_subscription_body(sub_id, ua, host, "text/html", prefix)
+
+
+def raw_links(body):
+    """Strictly decode a raw/base64 URI list; error messages and JSON are not subscriptions."""
+    if len(body) > JSON_FIX_MAX:
+        raise ValueError("subscription too large")
+    text = body.decode("utf-8").strip()
+    encoded = "://" not in text
+    if encoded:
+        encoded_body = "".join(text.split())
+        text = base64.b64decode(encoded_body + "=" * (-len(encoded_body) % 4), validate=True).decode("utf-8")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if any(len(line) > 8192 or not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", line)
+           or any(ord(c) < 32 or ord(c) == 127 for c in line) for line in lines):
+        raise ValueError("not a URI subscription")
+    return lines, encoded
+
+
+def restore_tuic_links(body, sub_id, ua, host, prefix=None):
+    """Work around 3x-ui #6978 after a successful raw response, preserving raw/base64 and native links."""
+    if len(body) > JSON_FIX_MAX or prefix not in (None, PATH):
+        return body
+    try:
+        lines, encoded = raw_links(body)
+    except (ValueError, UnicodeError):
+        return body
+    try:
+        links = tuic_links_from_page(fetch_tuic_page(sub_id, ua, host, prefix), sub_id)
+    except (ValueError, UnicodeError, RecursionError, urllib.error.URLError, http.client.HTTPException, OSError):
+        log("TUIC: не удалось прочитать локальную страницу подписки; текущий ответ сохранён")
+        return body
+    native_bases = {key for line in lines if (key := tuic_identity(line)) is not None}
+    seen_profiles = set()
+    added = []
+    for link in links:
+        base = tuic_identity(link)
+        if base in native_bases:
+            # A native raw export is authoritative, even when HTML picks another random SNI.
+            continue
+        parsed = urllib.parse.urlsplit(link)
+        query = tuple(sorted(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)))
+        profile = base, parsed.path, query
+        if profile not in seen_profiles:
+            # Keep every HTML Host/SNI variant for a missing base; never grow native_bases here.
+            seen_profiles.add(profile)
+            added.append(link)
+    if not added:
+        return body
+    out = "\n".join(lines + added).encode()
+    return base64.b64encode(out) if encoded else out
+
+
+def cli_links(sub_id, host):
+    """Shared CLI export for kit/fresh install: full raw links, including VPN/TG; no proxy server."""
+    try:
+        body = local_subscription_body(sub_id, "v2rayN/7", host, "text/plain")
+        body = restore_tuic_links(body, sub_id, "v2rayN/7", host)
+        lines, _ = raw_links(body)
+        grace = load_grace()
+        for link in lines:
+            print(reality_link(grace_link(link, grace)))
+        return 0
+    except (ValueError, UnicodeError, RecursionError, urllib.error.URLError, http.client.HTTPException, OSError):
+        log("Не удалось получить ссылки из локальной подписки панели")
+        return 1
 
 
 def strip_awg(clash_yaml):
@@ -455,6 +682,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         sub_id = path[len(prefix):]
         if not SUB_ID.match(sub_id) and not (prefix == PATH and ASSET.match(sub_id)):
             return self.send_html_error(404)
+        is_subscription = SUB_ID.fullmatch(sub_id) is not None
         ua = self.headers.get("User-Agent", "")
         host = CONF.get("link_host") or self.headers.get("Host", CONF.get("host", ""))
         accept = self.headers.get("Accept", "")
@@ -462,7 +690,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if code is None:
             return self.send_html_error(502)
 
-        clash = (bool(CLASH_UA.search(ua)) or prefix != PATH) and "yaml" in headers.get("content-type", "")
+        clash = is_subscription and (bool(CLASH_UA.search(ua)) or prefix != PATH) and "yaml" in headers.get("content-type", "")
         awg = clash and not NO_AWG_UA.search(ua)
         # В журнал – только приложение и что ему отдали, без IP.
         log(f"{ua[:80]!r} → {'clash+awg' if awg else 'clash' if clash else headers.get('content-type', '?').split(';')[0]}")
@@ -474,12 +702,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 acode, _, abody = upstream(sub_id + "-awg", ua, host, accept, prefix)
                 if acode == 200 and abody:
                     body = merge_awg(body, abody)
-            elif code == 200 and ("json" in headers.get("content-type", "") or (
+            elif code == 200 and is_subscription and ("json" in headers.get("content-type", "") or (
                     "text/plain" in headers.get("content-type", "") and body.lstrip()[:1] in (b"[", b"{"))):
                 # Панель 3.9 отдаёт JSON-подписку с Content-Type text/plain – определяем по телу.
                 body = fix_vless_encryption(body, load_grace())
-            elif code == 200 and "text/plain" in headers.get("content-type", ""):
+            elif code == 200 and is_subscription and "text/plain" in headers.get("content-type", ""):
+                body = restore_tuic_links(body, sub_id, upstream_ua(ua), host, prefix)
                 body = strip_links(body, load_grace())
+            if code == 200 and clash:
+                body = fix_clash_reality(body)
             if code == 200 and clash and CONF.get("auto", True):
                 body = add_auto(body)
             if code == 200 and clash and CONF.get("dns", True):
@@ -490,8 +721,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 loaded = load_rules()
                 if loaded:
                     body = apply_rules(body, loaded)
-        except (yaml.YAMLError, UnicodeError) as e:
-            log(f"не удалось обработать подписку: {e}")
+        except (yaml.YAMLError, UnicodeError):
+            log("не удалось обработать подписку; подробности с данными клиента не записываются")
 
         self.send_response(code)
         for k in PASS_HEADERS:
@@ -566,6 +797,11 @@ def unknown_geo(kind, names):
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--links":
+        if len(sys.argv) != 4:
+            log("Использование: kit-sub.py --links SUB_ID HOST")
+            raise SystemExit(1)
+        raise SystemExit(cli_links(sys.argv[2], sys.argv[3]))
     if "--routing-payload" in sys.argv:
         # kit net split: профиль для панели (для Happ и Xray); пусто и код 1, если правил нет.
         loaded = load_rules(report=lambda m: print(m, file=sys.stderr))
